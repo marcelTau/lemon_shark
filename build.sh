@@ -1,5 +1,7 @@
 #!/bin/bash
 
+cargo build -r
+
 qemu-system-riscv64 \
     -machine virt \
     -bios default \
