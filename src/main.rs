@@ -1,7 +1,13 @@
 #![no_std]
 #![no_main]
 
-use core::{arch::global_asm, panic::PanicInfo};
+mod log;
+mod trap_handler;
+
+use core::{
+    arch::{asm, global_asm},
+    panic::PanicInfo,
+};
 
 // ; This is the section that we mapped first in the linker script `linker.ld`
 // .section .text.boot
@@ -21,39 +27,26 @@ global_asm!(
     ".global _boot",
     "_boot:",
     "   la sp, _stack_top",
-    "   call _start",
+    "   call _start", // can use `tail` here because _start never returns hence we don't need to
+                      // store the return address
 );
-
-fn write_char_to_uart(c: char) {
-    /// The UART is a hardware device which QEMU reads from and displays in the terminal.
-    const UART_ADDRESS: usize = 0x10000000;
-
-    unsafe {
-        let uart = UART_ADDRESS as *mut u8;
-        uart.write_volatile(c as u8);
-    }
-}
-
-pub fn _print(args: ::core::fmt::Arguments) {
-    for c in args.as_str().unwrap().chars() {
-        write_char_to_uart(c);
-    }
-}
-
-#[macro_export]
-macro_rules! uart_print {
-    ($($arg:tt)*) => {
-        $crate::_print(format_args!($($arg)*));
-    };
-}
 
 #[unsafe(no_mangle)]
 extern "C" fn _start() -> ! {
-    uart_print!("Hello from Lemon Shark: v0.0.{}", 1);
+    log!("Hello from Lemon Shark: v0.0.{}\n", 1);
+
+    trap_handler::init();
+
+    unsafe {
+        asm!("unimp");
+    }
+
+    log!("Bye :^)\n");
     loop {}
 }
 
 #[panic_handler]
-fn panic_handler(_info: &PanicInfo) -> ! {
+fn panic_handler(info: &PanicInfo) -> ! {
+    log!("Oh shit! {info:?}");
     loop {}
 }
