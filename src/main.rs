@@ -34,16 +34,22 @@ fn write_char_to_uart(c: char) {
     }
 }
 
-fn write_string_to_uart(s: &str) {
-    for c in s.chars() {
+pub fn _print(args: ::core::fmt::Arguments) {
+    for c in args.as_str().unwrap().chars() {
         write_char_to_uart(c);
     }
 }
 
+#[macro_export]
+macro_rules! uart_print {
+    ($($arg:tt)*) => {
+        $crate::_print(format_args!($($arg)*));
+    };
+}
+
 #[unsafe(no_mangle)]
 extern "C" fn _start() -> ! {
-    write_string_to_uart("Hello World!");
-
+    uart_print!("Hello from Lemon Shark: v0.0.{}", 1);
     loop {}
 }
 
