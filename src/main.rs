@@ -37,10 +37,6 @@ extern "C" fn _start() -> ! {
 
     trap_handler::init();
 
-    unsafe {
-        asm!("unimp");
-    }
-
     log!("Bye :^)\n");
     loop {}
 }

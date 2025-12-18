@@ -37,7 +37,8 @@ impl Scause {
 
     fn reason(&self) -> ScauseReason {
         if self.is_interrupt() {
-            match self.0 >> 1_usize {
+            // unset the interrupt bit
+            match self.0 & 0x7FFFFFFFFFFFFFFF {
                 0 => ScauseReason::UserSoftwareInterrupt,
                 1 => ScauseReason::SupervisorSoftwareInterrupt,
                 4 => ScauseReason::UserTimerInterrupt,
