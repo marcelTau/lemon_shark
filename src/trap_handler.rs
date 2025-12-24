@@ -1,8 +1,12 @@
 use core::arch::asm;
-
+use core::sync::atomic::{AtomicBool, Ordering};
+use core::arch::naked_asm;
 use crate::log;
 
-#[derive(Debug)]
+/// Atomic that indicates that there was a `TRAP`.
+pub(crate) static TRAP: AtomicBool = AtomicBool::new(false);
+
+#[derive(Debug, PartialEq)]
 enum ScauseReason {
     // interrupts
     UserSoftwareInterrupt,
@@ -32,7 +36,7 @@ struct Scause(usize);
 
 impl Scause {
     fn is_interrupt(&self) -> bool {
-        (self.0 & (1 << usize::BITS - 1)) != 0
+        (self.0 & (1 << (usize::BITS - 1))) != 0
     }
 
     fn reason(&self) -> ScauseReason {
@@ -69,40 +73,105 @@ impl core::fmt::Debug for Scause {
     }
 }
 
-#[inline(never)]
+/// Naked wrapper around the `trap handler` to swap out the stack with a known good stack
+/// that has been set in the `sscratch` register.
+///
+/// For that to work, we need to store all registers that might be clobbered on the stack
+/// before calling the rust trap handler and restore them afterwards.
+#[unsafe(naked)]
 #[unsafe(no_mangle)]
-extern "C" fn trap_handler() -> ! {
+pub extern "C" fn trap_handler() -> ! {
+    naked_asm!(
+            // Swap `sp` and `sscratch` atomically
+            "csrrw sp, sscratch, sp",
+
+            // Allocate stack frame for all registers we need to save
+            // We need to save: ra, a0-a7, t0-t6 = 1 + 8 + 7 = 16 registers = 128 bytes
+            // Round to 16-byte alignment: 128 bytes
+            "addi sp, sp, -128",
+
+            // Save all caller-saved registers that might be clobbered
+            "sd ra, 0(sp)",
+            "sd t0, 8(sp)",
+            "sd t1, 16(sp)",
+            "sd t2, 24(sp)",
+            "sd t3, 32(sp)",
+            "sd t4, 40(sp)",
+            "sd t5, 48(sp)",
+            "sd t6, 56(sp)",
+            "sd a0, 64(sp)",
+            "sd a1, 72(sp)",
+            "sd a2, 80(sp)",
+            "sd a3, 88(sp)",
+            "sd a4, 96(sp)",
+            "sd a5, 104(sp)",
+            "sd a6, 112(sp)",
+            "sd a7, 120(sp)",
+
+            // Call the rust code
+            "call {trap_handler_rust}",
+
+            // Restore all caller-saved registers
+            "ld ra, 0(sp)",
+            "ld t0, 8(sp)",
+            "ld t1, 16(sp)",
+            "ld t2, 24(sp)",
+            "ld t3, 32(sp)",
+            "ld t4, 40(sp)",
+            "ld t5, 48(sp)",
+            "ld t6, 56(sp)",
+            "ld a0, 64(sp)",
+            "ld a1, 72(sp)",
+            "ld a2, 80(sp)",
+            "ld a3, 88(sp)",
+            "ld a4, 96(sp)",
+            "ld a5, 104(sp)",
+            "ld a6, 112(sp)",
+            "ld a7, 120(sp)",
+
+            // Deallocate stack frame
+            "addi sp, sp, 128",
+
+            // Swap back the stacks
+            "csrrw sp, sscratch, sp",
+
+            // Return from trap handler
+            "sret",
+
+            trap_handler_rust = sym trap_handler_rust,
+     );
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn trap_handler_rust() {
     let sepc: usize;
     let scause: usize;
 
-    unsafe {
-        asm!("csrr {0}, scause", out(reg) scause);
-        asm!("csrr {0}, sepc", out(reg) sepc);
+    unsafe { 
+        asm!("csrr {}, scause", out(reg) scause);
+        asm!("csrr {}, sepc", out(reg) sepc);
     };
 
     let scause = Scause(scause);
-    log!("Trap Handler at {:#0x}\n", sepc);
-    log!("\tScause = {scause:?}\n");
 
-    loop {}
+    log!("TRAP at {sepc:#0x?} ({scause:?})");
+
+    if scause.is_interrupt() && scause.reason() == ScauseReason::SupervisorTimerInterrupt {
+        crate::timer::new_time();
+
+        // Setting the TRAP to true if it's currently false, not changing it if it's true.
+        // Don't care about the result here.
+        let _ = TRAP.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst);
+    } 
 }
 
 /// Initializes the trap handler by writing the address of the `trap_handler` to the `stvec`
 /// register.
 pub(crate) fn init() {
-    let write_addr = (trap_handler as usize) & !0b11;
+    let trap_handler_addr = (trap_handler as usize) & !0b11;
     unsafe {
-        asm!("csrw stvec, {}", in(reg) write_addr);
+        asm!("csrw stvec, {}", in(reg) trap_handler_addr);
     };
 
-    let read_addr: usize;
-
-    unsafe {
-        asm!("csrr {}, stvec", out(reg) read_addr);
-    };
-
-    // sanity check
-    assert_eq!(write_addr, read_addr);
-
-    log!("Trap Handler initialized at {:#0x}\n", write_addr);
+    log!("Trap Handler initialized at {trap_handler_addr:#0x}");
 }
