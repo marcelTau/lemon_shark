@@ -1,6 +1,6 @@
 fn write_char_to_uart(c: char) {
     /// The UART is a hardware device which QEMU reads from and displays in the terminal.
-    const UART_ADDRESS: usize = 0x10000000;
+    const UART_ADDRESS: usize = 0x10_000_000;
 
     unsafe {
         let uart = UART_ADDRESS as *mut u8;
@@ -22,12 +22,25 @@ impl core::fmt::Write for UartWriter {
 
 pub fn _print(args: ::core::fmt::Arguments) {
     use core::fmt::Write;
-    UartWriter.write_fmt(args).unwrap()
+
+    if UartWriter.write_fmt(args).is_err() {
+        // Fallback: write error message directly
+        unsafe {
+            let uart = 0x10_000_000 as *mut u8;
+            uart.write_volatile(b'[');
+            uart.write_volatile(b'E');
+            uart.write_volatile(b']');
+        }
+    }
+
+    let _ = UartWriter.write_str("\n");
 }
 
 #[macro_export]
 macro_rules! log {
     ($($arg:tt)*) => {
-        $crate::log::_print(format_args!($($arg)*));
+        $crate::interrupts::without_interrupts(|| {
+            $crate::log::_print(format_args!($($arg)*))
+        });
     };
 }
