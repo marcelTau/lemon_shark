@@ -11,4 +11,8 @@ qemu-system-riscv64 \
     -machine virt \
     -bios default \
     -kernel ./target/riscv64gc-unknown-none-elf/debug/lemon_shark \
-    -nographic
+    -nographic \
+    -d int,cpu_reset \
+    -D qemu.log \
+    # -s -S
+     # -cpu rv64 \

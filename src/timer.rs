@@ -51,7 +51,7 @@ impl FdtHeader {
 
 /// Helper function that creates a timer for 1 second using the frequency read
 /// from the device tree.
-pub(crate) fn new_time() {
+pub fn new_time() {
     const TIME_FN: usize = 0x54494D45;
 
     let freq = TIMER_FREQUENCY.load(Ordering::Acquire);
@@ -71,7 +71,7 @@ pub(crate) fn new_time() {
     }
 }
 
-pub(crate) fn init(dtb_addr: usize) {
+pub fn init(dtb_addr: usize) {
     // manually read the header to get the size of the device table
     let ptr = dtb_addr as *const u8;
 

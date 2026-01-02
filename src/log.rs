@@ -32,6 +32,12 @@ pub fn _print(args: ::core::fmt::Arguments) {
             uart.write_volatile(b']');
         }
     }
+}
+
+pub fn _println(args: ::core::fmt::Arguments) {
+    use core::fmt::Write;
+
+    _print(args);
 
     let _ = UartWriter.write_str("\n");
 }
@@ -41,6 +47,15 @@ macro_rules! log {
     ($($arg:tt)*) => {
         $crate::interrupts::without_interrupts(|| {
             $crate::log::_print(format_args!($($arg)*))
+        });
+    };
+}
+
+#[macro_export]
+macro_rules! logln {
+    ($($arg:tt)*) => {
+        $crate::interrupts::without_interrupts(|| {
+            $crate::log::_println(format_args!($($arg)*))
         });
     };
 }

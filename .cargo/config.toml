@@ -1,5 +1,17 @@
 [build]
 target = "riscv64gc-unknown-none-elf"
 
+# [unstable]
+# build-std-features = ["compiler-builtins-mem"]
+# build-std = ["core", "alloc", "compiler_builtins"]
+# panic-abort-tests = true
+
 [target.riscv64gc-unknown-none-elf]
 rustflags = ["-C", "link-arg=-Tlinker.ld"]
+runner = [
+    "qemu-system-riscv64",
+    "-machine", "virt",
+    "-bios", "default",
+    "-nographic",
+    "-kernel"
+]

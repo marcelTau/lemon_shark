@@ -41,5 +41,11 @@ SECTIONS
         _stack_start = .;
         . += 16384;     /* allocate 16kb  */
         _stack_top = .; /* define the `_stack_top` symbol */
+
+        /* Reserve heap for kernel */
+        . = ALIGN(16);
+        _heap_start = .;
+        . += 1048576;
+        _heap_end = .;
     }
 }
