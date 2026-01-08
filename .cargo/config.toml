@@ -13,5 +13,7 @@ runner = [
     "-machine", "virt",
     "-bios", "default",
     "-nographic",
+    # "-s",
+    # "-S",
     "-kernel"
 ]

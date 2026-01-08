@@ -1,4 +1,4 @@
-use crate::logln;
+use crate::{logln, println};
 use core::arch::asm;
 use core::arch::naked_asm;
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -26,6 +26,12 @@ enum ScauseReason {
     StoreAmoAccessFault,
     EnvironmentCall,
 
+    // TODO(mt): when looking into semihosting again, 0x3f is the code for a
+    // semihost operation in qemu: https://github.com/qemu/qemu/blob/master/target/riscv/cpu_bits.h#L785
+    //
+    // Don't know if this is useful as with the latest try, we could not manage
+    // to make qemu read the ebreak call as openSBI only reads things in
+    // m-mode and we capture the breakpoint exception in s-mode.
     Reserved,
 }
 
@@ -87,7 +93,6 @@ pub extern "C" fn trap_handler() -> ! {
 
            // Allocate stack frame for all registers we need to save
            // We need to save: ra, a0-a7, t0-t6 = 1 + 8 + 7 = 16 registers = 128 bytes
-           // Round to 16-byte alignment: 128 bytes
            "addi sp, sp, -128",
 
            // Save all caller-saved registers that might be clobbered
@@ -111,7 +116,6 @@ pub extern "C" fn trap_handler() -> ! {
            // Call the rust code
            "call {trap_handler_rust}",
 
-           // Restore all caller-saved registers
            "ld ra, 0(sp)",
            "ld t0, 8(sp)",
            "ld t1, 16(sp)",
@@ -120,7 +124,6 @@ pub extern "C" fn trap_handler() -> ! {
            "ld t4, 40(sp)",
            "ld t5, 48(sp)",
            "ld t6, 56(sp)",
-           "ld a0, 64(sp)",
            "ld a1, 72(sp)",
            "ld a2, 80(sp)",
            "ld a3, 88(sp)",
@@ -154,14 +157,35 @@ extern "C" fn trap_handler_rust() {
 
     let scause = Scause(scause);
 
-    logln!("TRAP at {sepc:#0x?} ({scause:?})");
+    println!("TRAP at {sepc:#0x?} ({scause:?})");
 
-    if scause.is_interrupt() && scause.reason() == ScauseReason::SupervisorTimerInterrupt {
-        crate::timer::new_time();
+    panic!();
 
-        // Setting the TRAP to true if it's currently false, not changing it if it's true.
-        // Don't care about the result here.
-        let _ = TRAP.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst);
+    match scause.reason() {
+        ScauseReason::SupervisorTimerInterrupt => {
+            crate::timer::new_time(1000000000);
+
+            // Setting the TRAP to true if it's currently false, not changing it if it's true.
+            // Don't care about the result here.
+            let _ = TRAP.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst);
+        }
+        ScauseReason::Breakpoint => {
+            // Determine ebreak size and skip it
+            let ebreak_size = unsafe {
+                let instr_ptr = sepc as *const u16;
+                let first_halfword = instr_ptr.read();
+                if (first_halfword & 0b11) != 0b11 {
+                    2
+                } else {
+                    4
+                }
+            };
+
+            unsafe {
+                asm!("csrw sepc, {}", in(reg) sepc + ebreak_size);
+            }
+        }
+        _ => {}
     }
 }
 

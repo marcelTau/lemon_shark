@@ -4,7 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-fdt = "0.1.5"
+fdt = { version = "0.1.5", features = ["pretty-printing"] }
+spin = "0.10.0"
 
 [[bin]]
 name = "lemon_shark"
@@ -25,3 +26,4 @@ panic = "abort"
 
 [features]
 stats = []
+logging = []
