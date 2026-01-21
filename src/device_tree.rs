@@ -1,5 +1,5 @@
 use crate::logln;
-use core::cell::UnsafeCell;
+use core::{cell::UnsafeCell, str::FromStr};
 
 extern crate alloc;
 use alloc::string::String;
@@ -79,7 +79,7 @@ impl LockedSystemInfo {
 struct SystemInfo {
     pub timer_frequency: usize,
     pub cpus: usize,
-    pub cpu_isa: Option<String>,
+    pub cpu_isa: String,
     pub total_memory: usize,
 }
 
@@ -95,9 +95,6 @@ impl SystemInfo {
         let slice = unsafe { core::slice::from_raw_parts(ptr, size as usize) };
         let fdt = fdt::Fdt::new(slice).expect("Could not read device tree");
 
-        use crate::println;
-        // println!("{fdt:?}");
-
         let cpu = fdt.cpus().next().unwrap();
 
         let mut total_memory = 0;
@@ -107,29 +104,14 @@ impl SystemInfo {
             }
         }
 
-        println!("CPU IDS: {:?}", cpu.ids());
-
         let isa = cpu.properties().find(|p| p.name.starts_with("riscv,isa"));
-
-        println!("len = {}", isa.unwrap().value.len());
         let value = isa.unwrap().value;
-
         let str_value = alloc::string::String::from_utf8(value.to_vec()).unwrap();
-
-        println!("isa = {isa:?}: {str_value:?}");
-
-        // ISA string (shows supported extensions)
-        // let isa = cpu.ids().find_map(|id| {
-        //     if id.starts_with("riscv") {
-        //         Some(id)
-        //     } else {
-        //         None
-        //     }
-        // });
+        let (base_isa, _) = str_value.split_once('_').unwrap();
 
         SystemInfo {
             cpus: fdt.cpus().count(),
-            cpu_isa: None,
+            cpu_isa: String::from_str(base_isa).unwrap(),
             timer_frequency: fdt.cpus().next().expect("No cpu?").timebase_frequency(),
             total_memory,
         }
@@ -153,6 +135,6 @@ pub fn total_memory() -> usize {
     SYSINFO.lock().inner().total_memory
 }
 
-pub fn cpu_isa() -> Option<String> {
+pub fn cpu_isa() -> String {
     SYSINFO.lock().inner().cpu_isa.clone()
 }
