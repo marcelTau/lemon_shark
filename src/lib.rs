@@ -4,8 +4,9 @@
 #![test_runner(crate::test_runner)]
 #![reexport_test_harness_main = "test_main"]
 
-pub mod device_tree;
 pub mod allocator;
+pub mod device_tree;
+pub mod filesystem;
 pub mod interrupts;
 pub mod log;
 pub mod println;
@@ -13,34 +14,40 @@ pub mod shell;
 pub mod timer;
 pub mod trap_handler;
 
-pub mod allocator2;
-
-use core::panic::PanicInfo;
-
 use crate::allocator::LockedAllocator;
 
-#[global_allocator]
-pub static ALLOCATOR: LockedAllocator = LockedAllocator::new();
-
-pub fn dump_memory() {
-    unsafe { ALLOCATOR.dump_state() };
-}
+use core::panic::PanicInfo;
 
 /// This panic handler is used by the kernel and the tests.
 #[panic_handler]
 fn panic_handler(info: &PanicInfo) -> ! {
+    let msg = info.message();
     if let Some(loc) = info.location() {
-        logln!("[PANIC] oh shit ... {} in {}:{}", info.message(), loc.file(), loc.line());
-        // println!("[PANIC] oh shit ... {} in {}:{}", info.message(), loc.file(), loc.line());
+        // #[cfg(not(feature = "logging"))]
+        {
+            println!("[PANIC] oh shit ... {msg} in {}:{}", loc.file(), loc.line());
+        }
+        logln!("[PANIC] oh shit ... {msg} in {}:{}", loc.file(), loc.line());
     } else {
-        logln!("[PANIC] oh shit ... {}", info.message());
-        // println!("[PANIC] oh shit ... {}", info.message());
+        logln!("[PANIC] oh shit ... {msg}");
+
+        // #[cfg(not(feature = "logging"))]
+        {
+            println!("[PANIC] oh shit ... {msg}");
+        }
     }
 
     #[cfg(test)]
     lemon_shark::exit_qemu(1);
 
     loop {}
+}
+
+#[global_allocator]
+pub static ALLOCATOR: LockedAllocator = LockedAllocator::new();
+
+pub fn dump_memory() {
+    unsafe { ALLOCATOR.dump_state() };
 }
 
 pub fn test_runner(tests: &[&dyn Testable]) {

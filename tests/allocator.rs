@@ -6,7 +6,7 @@
 
 use core::arch::global_asm;
 
-use lemon_shark::allocator2::FreeListAllocator;
+use lemon_shark::allocator::FreeListAllocator;
 use lemon_shark::{interrupts, logln, trap_handler};
 
 use core::arch::asm;

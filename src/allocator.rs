@@ -1,8 +1,9 @@
-use core::alloc::Layout;
+use core::alloc::{GlobalAlloc, Layout};
+use core::cell::UnsafeCell;
 use core::mem;
 
-use crate::allocator::HeapBounds;
 use crate::logln;
+use crate::println;
 
 use core::ops::ControlFlow;
 
@@ -10,7 +11,41 @@ pub fn align_up(addr: usize, align: usize) -> usize {
     (addr + align - 1) & !(align - 1)
 }
 
-struct UserPointer(usize);
+pub struct LockedAllocator {
+    inner: UnsafeCell<FreeListAllocator>,
+}
+
+unsafe impl Sync for LockedAllocator {}
+
+impl LockedAllocator {
+    pub const fn new() -> Self {
+        Self {
+            inner: UnsafeCell::new(FreeListAllocator {
+                head: None,
+                #[cfg(feature = "stats")]
+                stats: AllocationStats::new(),
+            }),
+        }
+    }
+
+    pub unsafe fn init(&self) {
+        unsafe { (*self.inner.get()).init() };
+    }
+
+    pub unsafe fn dump_state(&self) {
+        unsafe { (*self.inner.get()).dump_state() };
+    }
+}
+
+unsafe impl GlobalAlloc for LockedAllocator {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        unsafe { (*self.inner.get()).alloc(layout) }
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        unsafe { (*self.inner.get()).dealloc(ptr, layout) }
+    }
+}
 
 #[repr(transparent)]
 #[derive(Clone, Copy, Debug)]
@@ -323,9 +358,9 @@ impl FreeListAllocator {
 
     pub fn dump_state(&self) {
         if self.head.is_none() {
-            logln!("========== ALLOCATOR DUMP ==========");
-            logln!("No more free memory :(");
-            logln!("====================================");
+            println!("========== ALLOCATOR DUMP ==========");
+            println!("No more free memory :(");
+            println!("====================================");
             return;
         }
 
@@ -333,14 +368,14 @@ impl FreeListAllocator {
 
         let start_addr = self.head.unwrap().as_addr();
 
-        logln!("========== ALLOCATOR DUMP ==========");
-        logln!("Allocator starting at {start_addr:#x}");
+        println!("========== ALLOCATOR DUMP ==========");
+        println!("Allocator starting at {start_addr:#x}");
 
         let mut total_size = 0;
 
         unsafe {
             Self::walk_list(self.head, |current, _| {
-                logln!(
+                println!(
                     "  Block {i} at={:#0x} size={} next={:?}",
                     current.as_addr(),
                     (*current.as_ptr()).size,
@@ -355,8 +390,8 @@ impl FreeListAllocator {
             });
         }
 
-        logln!("Total free memory: {total_size} bytes");
-        logln!("====================================");
+        println!("Total free memory: {total_size} bytes");
+        println!("====================================");
     }
 }
 
@@ -395,4 +430,35 @@ struct AllocationMetaData {
 
     /// Actual size of the allocation from the Allocators PoV.
     size: usize,
+}
+
+pub struct HeapBounds {
+    pub start: usize,
+    pub end: usize,
+}
+
+impl HeapBounds {
+    pub unsafe fn new() -> Self {
+        // Defined in `linker.ld`
+        //
+        // SAFETY: Those are lables inserted by the linker. We only care about
+        // the address where those lables got inserted not about the content.
+        // This means we don't care about the type, in this case `u8` is
+        // choosen by convention. Casting the symbol to an address is safe,
+        // dereferencing this pointer to read from that address is not and
+        // causes undefined behaviour.
+        unsafe extern "C" {
+            static _heap_start: u8;
+            static _heap_end: u8;
+        }
+
+        let start = unsafe { &_heap_start as *const u8 as usize };
+        let end = unsafe { &_heap_end as *const u8 as usize };
+
+        Self { start, end }
+    }
+
+    pub fn size(&self) -> usize {
+        self.end - self.start
+    }
 }
