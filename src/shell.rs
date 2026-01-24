@@ -1,5 +1,8 @@
 extern crate alloc;
+use core::{arch::asm, str::FromStr};
+
 use crate::dump_memory;
+use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -32,8 +35,9 @@ fn read_line_and_display() -> String {
                 }
 
                 if c == 127 {
-                    s.pop();
-                    print!("\x08 \x08");
+                    if s.pop().is_some() {
+                        print!("\x08 \x08");
+                    }
                     continue;
                 }
 
@@ -62,9 +66,57 @@ fn sysinfo() {
     let timer_frequency = crate::device_tree::timer_frequency();
 
     println!("Kernel: LemonShark v0.0.1");
-    println!("CPUs: {cpus} {:?}", cpu_isa);
+    println!("CPUs: {cpus} ({cpu_isa})");
     println!("Timer frequency: {}MHz", timer_frequency / 1000 / 1000);
     println!("Total memory: {}MB", total_memory / 1024 / 1024);
+}
+
+fn help() {
+    println!("Available commands:");
+    println!("  help            -- show this help menu");
+    println!("  exit            -- shutdown the OS");
+    println!("  memory          -- show the current state of the global kernel allocator");
+    println!("  timer <n>       -- set a timer for N seconds which will cause an interrupt");
+    println!("  sysinfo         -- print system information");
+    println!("  uptime          -- show for how long the system is running");
+    println!("  allocate <n>    -- allocate memory of size n to test the kernel allocator");
+    println!("  mkdir <name>    -- create a new directory in root");
+    println!("  ls              -- show directories");
+}
+
+fn shell_allocate(size: usize) {
+    let vec: Vec<u8> = alloc::vec![0; size];
+    let b = Box::new(vec);
+    Box::leak(b);
+}
+
+fn benchmark_allocator(n: usize, size: usize) {
+    extern crate alloc;
+    use alloc::vec;
+    use alloc::vec::Vec;
+
+    let mut allocations: Vec<Vec<u8>> = Vec::new();
+    let start: usize;
+
+    unsafe { asm!("rdtime {}", out(reg) start) };
+    let freq = crate::device_tree::timer_frequency() / 1000;
+    let start = start / freq;
+
+    // Current memory size is 1024Kb
+    for _ in 0..n {
+        allocations.push(vec![0; size]);
+    }
+
+    for _ in 0..n {
+        let alloc = allocations.pop().unwrap();
+        drop(alloc);
+    }
+
+    let end: usize;
+    unsafe { asm!("rdtime {}", out(reg) end) };
+    let end = end / freq;
+
+    println!("Took: {}ms", end - start);
 }
 
 enum ShellCommand {
@@ -74,11 +126,17 @@ enum ShellCommand {
     Timer { secs: usize },
     SysInfo,
     Uptime,
+    Help,
+    Allocate { size: usize },
+    Bench { n: usize, size: usize },
+    Ls { dir: u32 }, // INodeIndex for now
+    Mkdir { name: String },
 }
 
 impl ShellCommand {
+    /// A very naive way of reading user-input but for this shell it's fine :)
     fn from_line(line: &str) -> Option<ShellCommand> {
-        let parts: Vec<&str> = line.split(' ').collect();
+        let parts: Vec<&str> = line.trim().split(' ').collect();
 
         if parts.is_empty() {
             return None;
@@ -89,17 +147,39 @@ impl ShellCommand {
         let command = match command {
             "hello" => ShellCommand::Hello,
             "exit" => ShellCommand::Exit,
-            "memory_dump" => ShellCommand::MemoryDump,
+            "memory" => ShellCommand::MemoryDump,
             "uptime" => ShellCommand::Uptime,
             "sysinfo" => ShellCommand::SysInfo,
+            "bench" => {
+                let n = parts.get(1).and_then(|n| n.parse().ok())?;
+                let size = parts.get(2).and_then(|n| n.parse().ok())?;
+                ShellCommand::Bench { n, size }
+            }
+            "allocate" => {
+                let n = parts.get(1).and_then(|n| n.parse().ok())?;
+                ShellCommand::Allocate { size: n }
+            }
             "timer" => {
-                let Some(secs) = parts.get(1).and_then(|secs| secs.parse().ok()) else {
-                    return None;
-                };
-
+                let secs = parts.get(1).and_then(|secs| secs.parse().ok())?;
                 ShellCommand::Timer { secs }
             }
+            "help" => ShellCommand::Help,
+            "mkdir" => {
+                let mut name = String::from_str(parts.get(1).unwrap()).unwrap();
 
+                // TODO(mt): quick hack, if the path doesn't start with a '/'
+                // the prepend it so that it works with the current implementation.
+
+                if !name.starts_with("/") {
+                    name.insert(0, '/');
+                }
+                
+                ShellCommand::Mkdir { name }
+            }
+            "ls" => {
+                let dir = parts.get(1).and_then(|secs| secs.parse().ok()).unwrap_or_default();
+                ShellCommand::Ls { dir }
+            }
             _ => return None,
         };
 
@@ -108,11 +188,16 @@ impl ShellCommand {
 
     fn call(&self) {
         match self {
+            ShellCommand::Help => help(),
             ShellCommand::Hello => hello(),
             ShellCommand::Exit => exit(),
             ShellCommand::SysInfo => sysinfo(),
             ShellCommand::MemoryDump => dump_memory(),
+            ShellCommand::Bench { n, size } => benchmark_allocator(*n, *size),
+            Self::Allocate { size } => shell_allocate(*size),
             ShellCommand::Timer { secs } => crate::timer::new_time(*secs),
+            ShellCommand::Ls { dir } => crate::filesystem::dump_dir(*dir),
+            ShellCommand::Mkdir { name } => crate::filesystem::mkdir(name.clone()),
             ShellCommand::Uptime => {
                 let time = crate::timer::uptime();
                 println!("Currently running for {time}s");
