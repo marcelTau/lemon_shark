@@ -53,7 +53,7 @@ impl<const WORDS: usize> Bitmap<WORDS> {
 
     /// Find the first free block in the bitmap.
     pub fn find_free(&self) -> Option<u32> {
-        for (arr_idx, bits) in self.arr.iter().enumerate() {
+        for (arr_idx, bits) in self.arr.iter().enumerate().skip(1) {
             if bits != &u32::MAX {
                 let res = (!bits).trailing_zeros();
                 logln!("[FS] find free found at {arr_idx} {res}");

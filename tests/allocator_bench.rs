@@ -6,9 +6,9 @@
 
 use core::arch::global_asm;
 
-use lemon_shark::allocator::FreeListAllocator;
-use lemon_shark::{timer, interrupts, trap_handler};
 use core::arch::asm;
+use lemon_shark::allocator::FreeListAllocator;
+use lemon_shark::{interrupts, timer, trap_handler};
 
 global_asm!(
     ".section .text.boot",

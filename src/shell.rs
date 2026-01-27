@@ -131,7 +131,7 @@ enum ShellCommand {
     Mkdir { name: String },
     DumpFs,
     Write { inode_index: usize, text: String },
-    Cat { inode_index: usize }
+    Cat { inode_index: usize },
 }
 
 impl ShellCommand {
@@ -195,7 +195,7 @@ impl ShellCommand {
             }
             "cat" => {
                 let inode_index = parts.get(1).and_then(|n| n.parse().ok())?;
-                ShellCommand::Cat { inode_index, }
+                ShellCommand::Cat { inode_index }
             }
             _ => return None,
         };
@@ -216,7 +216,7 @@ impl ShellCommand {
             ShellCommand::Ls { dir } => crate::filesystem::api::dump_dir(*dir),
             ShellCommand::Mkdir { name } => crate::filesystem::api::mkdir(name.clone()),
             ShellCommand::DumpFs => crate::filesystem::dump(),
-            ShellCommand::Cat { inode_index }  => {
+            ShellCommand::Cat { inode_index } => {
                 let output = crate::filesystem::api::read_file(*inode_index);
                 println!("{output}");
             }

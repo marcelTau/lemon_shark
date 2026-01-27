@@ -30,6 +30,8 @@ use core::fmt::Debug;
 use core::mem;
 use core::sync::atomic::{AtomicBool, Ordering};
 
+pub(crate) use types::BlockIndex;
+
 #[derive(Debug)]
 pub(crate) enum Error {
     DuplicatedDirectory,
@@ -45,58 +47,6 @@ impl core::fmt::Display for Error {
     }
 }
 
-/// An Index into the blocks used for the `ramdisk`.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct BlockIndex(pub u32);
-
-/// A `ByteOffset` to something inside of a block.
-#[derive(Debug)]
-struct ByteOffset(u32);
-
-impl ByteOffset {
-    fn range<T>(&self) -> core::ops::Range<usize> {
-        self.0 as usize..self.0 as usize + mem::size_of::<T>()
-    }
-}
-
-/// This is the actual index of the INode.
-#[derive(Debug, Copy, Clone)]
-pub struct INodeIndex(u32);
-
-impl INodeIndex {
-    /// Returns the `BlockIndex` and the offset inside of the block for that
-    /// `INode`.
-    fn to_block_index(&self) -> (BlockIndex, ByteOffset) {
-        let block_index = BlockIndex(INODE_START as u32 + (self.0 / INODES_PER_BLOCK as u32));
-        let offset =
-            ByteOffset((self.0 % INODES_PER_BLOCK as u32) * mem::size_of::<INode>() as u32);
-        (block_index, offset)
-    }
-}
-
-struct DirEntryIndex(u32);
-impl DirEntryIndex {
-    fn to_block_index(&self) -> (BlockIndex, ByteOffset) {
-        let block_index = BlockIndex(DATA_START as u32 + (self.0 / DIR_ENTRY_PER_BLOCK as u32));
-        let offset =
-            ByteOffset((self.0 % DIR_ENTRY_PER_BLOCK as u32) * mem::size_of::<DirEntry>() as u32);
-        (block_index, offset)
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-#[repr(transparent)]
-struct DataBlockIndex(u32);
-impl DataBlockIndex {
-    fn to_block_index(self) -> BlockIndex {
-        BlockIndex(DATA_START as u32 + self.0)
-    }
-
-    fn value(&self) -> u32 {
-        self.0
-    }
-}
-
 pub(crate) const BLOCK_SIZE: usize = 512;
 const INODE_BLOCKS: usize = 10;
 const INODE_START: usize = 1;
@@ -106,6 +56,90 @@ const DATA_START: usize = INODE_START + INODE_BLOCKS + 1;
 const INODE_BITMAP_SIZE: usize = (INODE_BLOCKS * INODES_PER_BLOCK) / 32;
 const DATA_BITMAP_SIZE: usize = (ramdisk::total_blocks() - 1 /*superblock*/ - INODE_BLOCKS) / 32;
 const MAGIC: u64 = 0x4e4f4d454c; // lemon (le)
+
+mod types {
+    use core::mem;
+    use core::num::NonZeroU32;
+
+    use super::{DATA_START, INODE_START, INODES_PER_BLOCK, INode};
+
+    /// An Index into the blocks used for the `ramdisk`.
+    #[derive(Debug, Clone, Copy)]
+    pub(crate) struct BlockIndex(pub u32);
+
+    /// A `ByteOffset` to something inside of a block.
+    #[derive(Debug)]
+    pub(crate) struct ByteOffset(u32);
+
+    impl ByteOffset {
+        pub(crate) fn range<T>(&self) -> core::ops::Range<usize> {
+            self.0 as usize..self.0 as usize + mem::size_of::<T>()
+        }
+    }
+
+    /// This is the actual index of the INode.
+    #[derive(Debug, Copy, Clone)]
+    pub(crate) struct INodeIndex(pub u32);
+
+    impl INodeIndex {
+        /// Returns the `BlockIndex` and the offset inside of the block for that
+        /// `INode`.
+        pub(crate) fn to_block_index(&self) -> (BlockIndex, ByteOffset) {
+            let block_index = BlockIndex(INODE_START as u32 + (self.0 / INODES_PER_BLOCK as u32));
+            let offset =
+                ByteOffset((self.0 % INODES_PER_BLOCK as u32) * mem::size_of::<INode>() as u32);
+            (block_index, offset)
+        }
+    }
+
+    // pub(crate) struct DirEntryIndex(u32);
+    // impl DirEntryIndex {
+    //     pub(crate) fn to_block_index(&self) -> (BlockIndex, ByteOffset) {
+    //         let block_index = BlockIndex(DATA_START as u32 + (self.0 / DIR_ENTRY_PER_BLOCK as u32));
+    //         let offset = ByteOffset(
+    //             (self.0 % DIR_ENTRY_PER_BLOCK as u32) * mem::size_of::<DirEntry>() as u32,
+    //         );
+    //         (block_index, offset)
+    //     }
+    // }
+
+    /// `DataBlockIndex` is an index into the blocks of the ramdisk but is restricted to
+    /// indexes into the data segment. This is used to enforce this invariant in the
+    /// typesystem.
+    #[derive(Clone, Copy, Debug, Default)]
+    #[repr(transparent)]
+    pub(crate) struct DataBlockIndex(Option<NonZeroU32>);
+    impl DataBlockIndex {
+        /// Creates a new `DataBlockIndex` from a raw `DataBlockIndex` when read from disk
+        /// and should not be used otherwise.
+        pub(crate) fn from_raw(val: u32) -> Self {
+            if val != 0 && val < DATA_START as u32 {
+                panic!("Invalid DataBlockIndex {val}. Must be >= {DATA_START}");
+            }
+
+            Self(NonZeroU32::new(val))
+        }
+
+        /// Creates a new `DataBlockIndex` from an index into the data segment.
+        pub(crate) fn from_index(val: u32) -> Self {
+            Self(NonZeroU32::new(DATA_START as u32 + val))
+        }
+
+        pub(crate) fn to_block_index(self) -> BlockIndex {
+            BlockIndex(self.0.unwrap().get())
+        }
+
+        pub(crate) fn value(&self) -> Option<u32> {
+            self.0.map(|v| v.get())
+        }
+
+        pub(crate) fn is_none(&self) -> bool {
+            self.0.is_none()
+        }
+    }
+}
+
+use types::{DataBlockIndex, INodeIndex};
 
 /// The `INode` contains metadata about a file.
 ///
@@ -119,9 +153,13 @@ const MAGIC: u64 = 0x4e4f4d454c; // lemon (le)
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct INode {
+    /// Size of the data in `.blocks`.
     size: u32,
-    /// Used blocks of this file. TODO(mt): should be option<nonzeroU32>
+
+    /// Used blocks of this `INode`.
     blocks: [DataBlockIndex; 16],
+
+    /// Flag indicating if this is a directory.
     is_directory: bool,
 }
 
@@ -130,7 +168,7 @@ impl INode {
         INode {
             size: 0,
             is_directory: true,
-            blocks: core::array::from_fn(|_| DataBlockIndex(0)),
+            blocks: core::array::from_fn(|_| Default::default()),
         }
     }
 
@@ -138,18 +176,18 @@ impl INode {
         INode {
             size: 0,
             is_directory: false,
-            blocks: core::array::from_fn(|_| DataBlockIndex(0)),
+            blocks: core::array::from_fn(|_| Default::default()),
         }
     }
 
     fn from_bytes(bytes: &[u8]) -> Self {
         let size = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
-        let mut blocks: [DataBlockIndex; 16] = [DataBlockIndex(0); 16];
+        let mut blocks: [DataBlockIndex; 16] = [Default::default(); 16];
         let mut i = 4;
 
         (0..16).for_each(|idx| {
             let value = u32::from_le_bytes([bytes[i], bytes[i + 1], bytes[i + 2], bytes[i + 3]]);
-            blocks[idx] = DataBlockIndex(value);
+            blocks[idx] = DataBlockIndex::from_raw(value);
             i += 4;
         });
 
@@ -169,7 +207,8 @@ impl INode {
         let current_offset = 4;
         for i in 0..16 {
             let start = current_offset + (i * 4);
-            bytes[start..start + 4].copy_from_slice(&self.blocks[i].0.to_le_bytes());
+            let value = self.blocks[i].value().unwrap_or_default();
+            bytes[start..start + 4].copy_from_slice(&value.to_le_bytes());
         }
         bytes[68] = if self.is_directory { 1 } else { 0 };
 
@@ -331,10 +370,6 @@ impl LockedFilesystem {
         *self.inner.get_mut() = Some(filesystem);
     }
 
-    pub fn inner(&mut self) -> &mut Filesystem {
-        self.inner.get_mut().as_mut().unwrap()
-    }
-
     pub fn mkdir(&mut self, name: &str) -> Result<(), Error> {
         self.inner.get_mut().as_mut().unwrap().mkdir(name)
     }
@@ -347,16 +382,20 @@ impl LockedFilesystem {
         self.inner.get_mut().as_mut().unwrap().create_empty_root();
     }
 
-    fn write_to_file(&mut self, inode_index: INodeIndex, text: &str) {
+    fn write_to_file(&mut self, inode_index: INodeIndex, bytes: &[u8]) {
         self.inner
             .get_mut()
             .as_mut()
             .unwrap()
-            .write_to_file(inode_index, text);
+            .append_to_file(inode_index, bytes);
     }
 
-    pub fn read_file(&mut self, inode_index: INodeIndex) -> String {
-        self.inner.get_mut().as_mut().unwrap().read_file(inode_index)
+    pub(crate) fn read_file(&mut self, inode_index: INodeIndex) -> String {
+        self.inner
+            .get_mut()
+            .as_mut()
+            .unwrap()
+            .read_file(inode_index)
     }
 }
 
@@ -508,7 +547,6 @@ impl Filesystem {
         // entry.
         while let Some(entry) = peekable_iter.next() {
             let is_last = peekable_iter.peek().is_none();
-            let entries = self.read_dir_entry(current_index);
 
             let cmp = |bytes: &[u8]| -> bool {
                 let len = bytes.iter().take_while(|&&b| b != 0).count();
@@ -516,17 +554,17 @@ impl Filesystem {
                 entry.as_bytes() == &bytes[offset..len]
             };
 
-            if let Some(next_dir) = entries.iter().find(|e| cmp(&e.name[..])) {
+            if let Some(next_dir) = self
+                .read_dir_entry(current_index)
+                .iter()
+                .find(|e| cmp(&e.name[..]))
+            {
                 if is_last {
                     return Err(Error::DuplicatedDirectory);
                 }
-                logln!("** Found match {next_dir:?}");
+
                 prev_index = current_index;
                 current_index = next_dir.inode;
-                logln!(
-                    "Found matching subdirectory at {} = inode={:?}",
-                    next_dir.name(),
-                    next_dir.inode);
             } else {
                 if is_last {
                     // Create the `INode` for the new empty directory or file.
@@ -556,7 +594,6 @@ impl Filesystem {
                     } else {
                         println!("Created new file {name} at inode {inode_index:?}");
                     }
-
 
                     break;
                 } else {
@@ -589,15 +626,15 @@ impl Filesystem {
 
         logln!("[FS] Writing DirEntry {entry:?} at block_index={inode_internal_block_index:?}");
 
-        if inode_internal_block_index > 16 {
+        if inode_internal_block_index >= 16 {
             return Err(Error::NoSpaceForDirEntry);
         }
 
-        if inode.blocks[inode_internal_block_index].0 == 0 {
+        if inode.blocks[inode_internal_block_index].is_none() {
             let free = self.data_bitmap.find_free().unwrap();
-            let free = DataBlockIndex(free);
-            inode.blocks[inode_internal_block_index] = free;
-            self.data_bitmap.set(free.0);
+            let free_block_index = DataBlockIndex::from_index(free);
+            inode.blocks[inode_internal_block_index] = free_block_index;
+            self.data_bitmap.set(free);
         }
 
         let data_block_index = inode.blocks[inode_internal_block_index];
@@ -623,9 +660,8 @@ impl Filesystem {
         Ok(())
     }
 
-    /// Reads all the directory entries for that INode and returns them as a
-    /// Vec.
-    pub(crate) fn read_dir_entry(&mut self, inode_index: INodeIndex) -> Vec<DirEntry> {
+    /// Reads all the `DirEntry`s for that INode and returns them in a Vec.
+    fn read_dir_entry(&mut self, inode_index: INodeIndex) -> Vec<DirEntry> {
         // Get the `INode`
         let inode = self.inode_cache.get(inode_index);
 
@@ -639,24 +675,28 @@ impl Filesystem {
 
         let mut res = Vec::with_capacity(max_items);
         let mut buf = [0u8; BLOCK_SIZE];
-        let mut offset = 0;
-
-        let mut read_items = 0;
 
         // Loop and read all `DirEntry`s into `res`.
-        while read_items < max_items {
-            let data_block_index = inode.blocks[read_items];
-            let block_index = data_block_index.to_block_index();
-
-            // Read the block into `buf`.
+        for block_index in inode
+            .blocks
+            .iter()
+            .filter(|b| !b.is_none())
+            .map(|b| b.to_block_index())
+        {
             ramdisk::read_block(block_index, &mut buf);
 
-            // Read all the entries of that block.
-            while read_items < max_items {
-                let entry = DirEntry::from_bytes(&buf[offset..offset + mem::size_of::<DirEntry>()]);
-                offset += mem::size_of::<DirEntry>();
+            let items_in_block = (max_items - res.len()).min(DIR_ENTRY_PER_BLOCK);
+
+            for i in 0..items_in_block {
+                let start = i * mem::size_of::<DirEntry>();
+                let end = start + mem::size_of::<DirEntry>();
+
+                let entry = DirEntry::from_bytes(&buf[start..end]);
                 res.push(entry);
-                read_items += 1;
+            }
+
+            if res.len() == max_items {
+                break;
             }
         }
 
@@ -680,47 +720,7 @@ impl Filesystem {
         logln!("[FS] Filesystem initialized with empty root directory");
     }
 
-    // /// Appends the `bytes` to the content of the file pointed to by
-    // /// `inode_index`.
-    // fn write_to_file_inner(&mut self, inode_index: INodeIndex, text: &[u8]) {
-    //     let inode = self.inode_cache.get_mut(inode_index);
-
-    //     if inode.is_directory {
-    //         panic!("Can't write to directory");
-    //     }
-
-    //     let inode_internal_block_index = inode.size as usize / BLOCK_SIZE;
-
-    //     if inode_internal_block_index > 16 {
-    //         panic!("no more space for file");
-    //     }
-
-    //     if inode.blocks[inode_internal_block_index].0 == 0 {
-    //         let free = self.data_bitmap.find_free().unwrap();
-    //         let free = DataBlockIndex(free);
-    //         inode.blocks[inode_internal_block_index] = free;
-    //         self.data_bitmap.set(free.0);
-    //     }
-
-    //     let data_block_index = inode.blocks[inode_internal_block_index];
-    //     let byte_offset = inode.size % BLOCK_SIZE as u32;
-    //     let block_index = data_block_index.to_block_index();
-
-    //     let mut buf = [0u8; BLOCK_SIZE];
-
-    //     ramdisk::read_block(block_index, &mut buf);
-
-    //     buf[byte_offset as usize..byte_offset as usize + text.len()]
-    //         .copy_from_slice(text.as_bytes());
-
-    //     // TODO(mt): handle overflow to write to multiple blocks.
-
-    //     ramdisk::write_block(block_index, &buf);
-
-    //     inode.size += text.len() as u32;
-    // }
-
-    pub fn write_to_file(&mut self, inode_index: INodeIndex, text: &str) {
+    fn append_to_file(&mut self, inode_index: INodeIndex, bytes: &[u8]) {
         let inode = self.inode_cache.get_mut(inode_index);
 
         if inode.is_directory {
@@ -728,21 +728,17 @@ impl Filesystem {
         }
 
         let mut buf = [0u8; BLOCK_SIZE];
-        let mut total_bytes = text.len();
+        let mut total_bytes = bytes.len();
         let mut bytes_written = 0;
 
         while total_bytes > 0 {
             let last_used_block_index = inode.size as usize / BLOCK_SIZE;
 
-            if last_used_block_index > 16 {
-                panic!("no more space for file");
-            }
-
-            if inode.blocks[last_used_block_index].0 == 0 {
+            if inode.blocks[last_used_block_index].is_none() {
                 let free = self.data_bitmap.find_free().unwrap();
-                let free = DataBlockIndex(free);
-                inode.blocks[last_used_block_index] = free;
-                self.data_bitmap.set(free.0);
+                let free_block_index = DataBlockIndex::from_index(free);
+                inode.blocks[last_used_block_index] = free_block_index;
+                self.data_bitmap.set(free);
             }
 
             let data_block_index = inode.blocks[last_used_block_index];
@@ -751,36 +747,34 @@ impl Filesystem {
             let bytes_to_write = total_bytes.min(BLOCK_SIZE - byte_offset as usize);
             println!("Writing {}/{} bytes", bytes_to_write, total_bytes);
 
-
             let block_index = data_block_index.to_block_index();
 
             ramdisk::read_block(block_index, &mut buf);
 
             buf[byte_offset as usize..byte_offset as usize + bytes_to_write]
-                .copy_from_slice(&text.as_bytes()[bytes_written..bytes_written + bytes_to_write]);
+                .copy_from_slice(&bytes[bytes_written..bytes_written + bytes_to_write]);
 
             ramdisk::write_block(block_index, &buf);
-            inode.size += text.len() as u32;
+            inode.size += bytes_to_write as u32;
 
             total_bytes -= bytes_to_write;
             bytes_written += bytes_to_write;
         }
     }
 
-    pub fn read_file(&mut self, inode_index: INodeIndex) -> String {
+    pub(crate) fn read_file(&mut self, inode_index: INodeIndex) -> String {
         let inode = self.inode_cache.get_mut(inode_index);
 
         if inode.is_directory {
             panic!("Can't write to directory");
         }
 
-
         let mut buf = [0u8; BLOCK_SIZE];
 
         let mut total_bytes = inode.size as usize;
         let mut string = String::with_capacity(total_bytes);
 
-        for block in inode.blocks {
+        for block in inode.blocks.iter().filter(|b| !b.is_none()) {
             let b = block.to_block_index();
             ramdisk::read_block(b, &mut buf);
 
@@ -791,7 +785,6 @@ impl Filesystem {
         }
 
         string
-
     }
 
     /// Writes the superblock to block_index 0
@@ -821,7 +814,7 @@ impl Filesystem {
         let inode = self.inode_cache.get(inode_index);
         assert!(inode.is_directory);
 
-        for &block in inode.blocks.iter().filter(|&&b| b.0 > 0) {
+        for &block in inode.blocks.iter().filter(|&&b| !b.is_none()) {
             ramdisk::read_block(block.to_block_index(), &mut buf);
 
             for i in 0..DIR_ENTRY_PER_BLOCK {
@@ -916,7 +909,7 @@ pub(crate) mod api {
     }
 
     pub fn write_to_file(inode_index: usize, text: String) {
-        (*FS.lock()).write_to_file(INodeIndex(inode_index as u32), &text);
+        (*FS.lock()).write_to_file(INodeIndex(inode_index as u32), text.as_bytes());
     }
 
     pub fn read_file(inode_index: usize) -> String {
@@ -951,7 +944,7 @@ pub fn init() {
         s.push('A');
     }
 
-    (*FS.lock()).write_to_file(INodeIndex(1), &s);
+    (*FS.lock()).write_to_file(INodeIndex(1), s.as_bytes());
 
     // dump();
 }
