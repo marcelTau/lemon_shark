@@ -84,7 +84,7 @@ size and a pointer to the next `FreeBlock`.
 To start with the allocator has a single `FreeBlock` of the total size of our
 reserved memory.
 
-When we want to allocate, we split the block up and let and hand a pointer to
+When we want to allocate, we split the block up and return a pointer to
 the available memory to the user. We then need to move our `FreeBlock` up by
 the requested number of bytes and restore and modify our metadata.
 
@@ -125,6 +125,18 @@ to end up with 2 free blocks in our list as this limits the size of allocations
 that we can manage. We'd rather have a single block where we can split up as
 much as we need.
 ```
+
+### Alignments
+
+Rust requires the global allocator to follow the alignment requirements of
+the `Layout` passed to the `alloc()` and `dealloc()` functions. This means
+we have another constraint for the allocator that we need to take care of.
+
+We also need to align all the structs that we write to memory, we can set a
+minimum alignment for our allocator which ensures that all user pointers and
+internal `FreeBlock` are alinged.
+
+### Global alloc
 
 Using the `#[global_allocator]` annotation on a static instance of our 
 allocation sets the global allocator and allows us to finally use the core
