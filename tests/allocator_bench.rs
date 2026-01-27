@@ -7,8 +7,7 @@
 use core::arch::global_asm;
 
 use lemon_shark::allocator::FreeListAllocator;
-use lemon_shark::{interrupts, logln, trap_handler};
-
+use lemon_shark::{timer, interrupts, trap_handler};
 use core::arch::asm;
 
 global_asm!(
@@ -47,12 +46,6 @@ fn make_alloc() -> FreeListAllocator {
     alloc
 }
 
-fn rdtime() -> usize {
-    let time: usize;
-    unsafe { asm!("rdtime {}", out(reg) time) };
-    time
-}
-
 #[test_case]
 fn benchmark_1000_allocations() {
     use lemon_shark::println;
@@ -61,14 +54,14 @@ fn benchmark_1000_allocations() {
 
     let layout = core::alloc::Layout::from_size_align(1000, 8).unwrap();
 
-    let start = rdtime();
+    let start = timer::rdtime();
 
     for _ in 0..1000 {
         let ptr = alloc.alloc(layout);
         alloc.dealloc(ptr, layout);
     }
 
-    let end = rdtime();
+    let end = timer::rdtime();
     let elapsed = end - start;
 
     // Assuming 10 MHz timebase (adjust for your system)
@@ -90,14 +83,14 @@ fn benchmark_10000_allocations() {
 
     let layout = core::alloc::Layout::from_size_align(10000, 8).unwrap();
 
-    let start = rdtime();
+    let start = timer::rdtime();
 
     for _ in 0..10000 {
         let ptr = alloc.alloc(layout);
         alloc.dealloc(ptr, layout);
     }
 
-    let end = rdtime();
+    let end = timer::rdtime();
     let elapsed = end - start;
 
     // Assuming 10 MHz timebase (adjust for your system)
@@ -119,14 +112,14 @@ fn benchmark_100000_allocations() {
 
     let layout = core::alloc::Layout::from_size_align(100000, 8).unwrap();
 
-    let start = rdtime();
+    let start = timer::rdtime();
 
     for _ in 0..100000 {
         let ptr = alloc.alloc(layout);
         alloc.dealloc(ptr, layout);
     }
 
-    let end = rdtime();
+    let end = timer::rdtime();
     let elapsed = end - start;
 
     // Assuming 10 MHz timebase (adjust for your system)

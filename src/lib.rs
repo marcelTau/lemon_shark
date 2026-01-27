@@ -5,11 +5,14 @@
 #![reexport_test_harness_main = "test_main"]
 
 pub mod allocator;
+pub mod bitmap;
+pub mod bytereader;
 pub mod device_tree;
 pub mod filesystem;
 pub mod interrupts;
 pub mod log;
 pub mod println;
+pub mod ramdisk;
 pub mod shell;
 pub mod timer;
 pub mod trap_handler;

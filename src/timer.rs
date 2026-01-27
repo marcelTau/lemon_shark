@@ -24,12 +24,13 @@ pub fn new_time(secs: usize) {
     }
 }
 
-pub fn uptime() -> usize {
+pub fn rdtime() -> usize {
     let time: usize;
+    unsafe { asm!("rdtime {}", out(reg) time) }
+    time
+}
 
-    unsafe { asm!("rdtime {}", out(reg) time) };
-
+pub fn uptime() -> usize {
     let freq = crate::device_tree::timer_frequency();
-
-    time / freq
+    rdtime() / freq
 }

@@ -13,8 +13,8 @@ qemu-system-riscv64 \
     -cpu rv64 \
     -kernel ./target/riscv64gc-unknown-none-elf/debug/lemon_shark \
     -nographic \
-    -d int,cpu_reset \
-    -D qemu.log \
+    # -s -S \
+    # -d int,cpu_reset \
+    # -D qemu.log \
     # -semihosting \
     # -semihosting-config enable=on,target=native
-    # -s -S

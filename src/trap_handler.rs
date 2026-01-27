@@ -159,8 +159,6 @@ extern "C" fn trap_handler_rust() {
 
     println!("TRAP at {sepc:#0x?} ({scause:?})");
 
-    panic!();
-
     match scause.reason() {
         ScauseReason::SupervisorTimerInterrupt => {
             crate::timer::new_time(1000000000);

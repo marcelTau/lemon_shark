@@ -2,8 +2,7 @@
 #![no_main]
 
 use core::arch::{asm, global_asm};
-
-use lemon_shark::{ALLOCATOR, device_tree, allocator, interrupts, logln, shell, timer, trap_handler};
+use lemon_shark::{ALLOCATOR, device_tree, filesystem, interrupts, println, shell, trap_handler};
 
 // ; This is the section that we mapped first in the linker script `linker.ld`
 // .section .text.boot
@@ -31,6 +30,8 @@ global_asm!(
 #[cfg(not(test))]
 #[unsafe(no_mangle)]
 extern "C" fn _start(_: usize, device_table_addr: usize) -> ! {
+    print_welcome();
+
     // This is defined in the linker script and reserves space for a trap
     // stack.
     unsafe extern "C" {
@@ -51,5 +52,45 @@ extern "C" fn _start(_: usize, device_table_addr: usize) -> ! {
     unsafe { ALLOCATOR.init() };
 
     device_tree::init(device_table_addr);
+
+    filesystem::init();
+    filesystem::init();
+
     shell::shell()
+}
+
+fn print_welcome() {
+    let shark = r#"
+                     .#@@@@*....
+                    @@-....-@@@@@@:.
+                    .@@.        ..@@@@.     ........
+                     .@@-.          .@@@@@@@@@@@@@@@@@@@@@@...
+                      .@@.         =+......          .....-@@@@@@..
+                       .@@.                                   ..:@@@@@..
+                       .@@@@..                                     ...@@@@.
+                     .@@@..                                            ..@@.
+                   .@@@.                      .@@@@.                    .@@.
+                 ..@@..                      .@@@.+@.             .     .@@.
+                .@@+.                        .@@@@@@.           =@.    .@@.
+    ..         .@@..                          .@@@@.                   %@..
+  .@@@@@%.    .@@.              ..                                    @@=.
+   .@@..@@@. :@@.             @.@.                                  .@@..
+    .@@. .=@@@#.            ..@.@.        .@@@..                  .@@@.
+     *@*.  +..             .@.@.=@.       ...@.@-@@@@@%+=-+*@@@@@@@@..
+      @@.                  .@.-@..@.         .%@....@*.@.@.+@@.@@..
+      .@@.                  .@..+. ..          .#@@.@@..:. ...@@:.
+      .@@.  ..                                    ..@@@@-@@-@@@@.
+      =@-.  .@@@..     .@.                             ......@@@.
+     .@@. .@@%@@@.:@@@@+.         @.                      =@@@..
+     *@:@@@@.. .:@@@..@.        .@-.                  .@@@@..
+     .@@:..       .-@@.        .@-.              ..@@@@@..
+                  .@@..      .@@:.........:@@@@@@@%@@.
+                 .@@.      .@@@:%@@@@@@@@@@@@...  .@@.
+               .@@@.    .*@@@..            .:@@@. @@*.
+               @@:..%@@@@@..                  .@@@@..
+               .-@@@=...
+        "#;
+
+    println!("{shark}");
+    println!("Welcome to LemonShark v0.0.1");
 }
