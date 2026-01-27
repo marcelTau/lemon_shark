@@ -20,17 +20,30 @@
 //! 10-end  Data
 
 extern crate alloc;
+use crate::bitmap::Bitmap;
 use crate::bytereader::ByteReader;
 use crate::{logln, print, println, ramdisk};
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
+use core::cell::UnsafeCell;
+use core::fmt::Debug;
 use core::mem;
+use core::sync::atomic::{AtomicBool, Ordering};
 
-/// What kind of indexes do we have?
-///
-/// BlockIndex - actual number of the block
-/// INodeIndex - 0 is the first BlockIndex of the INode range
-/// DataIndex  - 0 is the first BlockIndex of the data range
+#[derive(Debug)]
+pub(crate) enum Error {
+    DuplicatedDirectory,
+    DirectoryDoesNotExist,
+    NoSpaceForDirEntry,
+}
+
+impl core::error::Error for Error {}
+
+impl core::fmt::Display for Error {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{self:?}")
+    }
+}
 
 /// An Index into the blocks used for the `ramdisk`.
 #[derive(Debug, Clone, Copy)]
@@ -48,7 +61,7 @@ impl ByteOffset {
 
 /// This is the actual index of the INode.
 #[derive(Debug, Copy, Clone)]
-struct INodeIndex(u32);
+pub struct INodeIndex(u32);
 
 impl INodeIndex {
     /// Returns the `BlockIndex` and the offset inside of the block for that
@@ -104,8 +117,8 @@ const MAGIC: u64 = 0x4e4f4d454c; // lemon (le)
 ///
 /// *Important* do not change the layout of this struct or reorder the fields.
 #[repr(C)]
-#[derive(Debug)]
-struct INode {
+#[derive(Debug, Copy, Clone)]
+pub struct INode {
     size: u32,
     /// Used blocks of this file. TODO(mt): should be option<nonzeroU32>
     blocks: [DataBlockIndex; 16],
@@ -117,6 +130,14 @@ impl INode {
         INode {
             size: 0,
             is_directory: true,
+            blocks: core::array::from_fn(|_| DataBlockIndex(0)),
+        }
+    }
+
+    fn empty_file() -> Self {
+        INode {
+            size: 0,
+            is_directory: false,
             blocks: core::array::from_fn(|_| DataBlockIndex(0)),
         }
     }
@@ -158,13 +179,12 @@ impl INode {
 
 /// The `DirEntry` contains metadata about a directory.
 #[repr(C)]
-struct DirEntry {
+pub struct DirEntry {
     /// Name of the directory
     name: [u8; 24],
     /// INode index of this directory
     inode: INodeIndex,
 }
-use core::fmt::Debug;
 
 impl core::fmt::Debug for DirEntry {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> Result<(), core::fmt::Error> {
@@ -293,109 +313,8 @@ impl SuperBlock {
     }
 }
 
-// enum Offset {
-//     /// INode offset, *not block offset*.
-//     INode(usize),
-//     SuperBlock,
-//     Data(usize),
-//     DirEntry(usize),
-//     Block(usize),
-// }
-//
-// #[derive(Copy, Clone, Debug)]
-// struct BlockIndex(usize);
-//
-// impl BlockIndex {
-//     fn from_inode_index(inode_index: usize) -> Self {
-//         let block_index = INODE_START + (inode_index / INODES_PER_BLOCK);
-//         if block_index > INODE_START + INODE_BLOCKS {
-//             panic!("No more inode blocks");
-//         }
-//         Self(block_index)
-//     }
-//
-//     fn from_dir_entry_index(dir_entry_index: usize) -> Self {
-//         let block_index = DATA_START + (dir_entry_index / DIR_ENTRY_PER_BLOCK);
-//         if block_index > ramdisk::total_blocks() {
-//             panic!("No free block to store DirEntry");
-//         }
-//         Self(block_index)
-//     }
-//
-//     fn superblock() -> Self {
-//         Self(0)
-//     }
-// }
-
-#[derive(Debug, PartialEq)]
-struct Bitmap<const WORDS: usize> {
-    arr: [u32; WORDS],
-}
-
-impl<const WORDS: usize> Bitmap<WORDS> {
-    const fn new() -> Self {
-        Self { arr: [0u32; WORDS] }
-    }
-
-    fn from_bytes(bytes: &[u8]) -> Self {
-        assert_eq!(bytes.len(), WORDS * 4);
-
-        let mut arr = [0u32; WORDS];
-        for (i, chunk) in bytes.chunks(4).enumerate() {
-            arr[i] = u32::from_le_bytes(chunk.try_into().unwrap());
-        }
-        Self { arr }
-    }
-
-    fn to_bytes(&self) -> &[u8] {
-        unsafe { core::slice::from_raw_parts(self.arr.as_ptr() as *const u8, WORDS * 4) }
-    }
-
-    fn set(&mut self, index: u32) {
-        assert!(index < WORDS as u32 * 32);
-
-        let arr_index = index / 32;
-        let bit_index = index % 32;
-
-        self.arr[arr_index as usize] |= 1 << bit_index;
-    }
-
-    fn unset(&mut self, index: u32) {
-        assert!(index < WORDS as u32 * 32);
-
-        let arr_index = index / 32;
-        let bit_index = index % 32;
-
-        self.arr[arr_index as usize] &= !(1 << bit_index);
-    }
-
-    fn is_set(&self, index: u32) -> bool {
-        assert!(index < WORDS as u32 * 32);
-
-        let arr_index = index / 32;
-        let bit_index = index % 32;
-
-        self.arr[arr_index as usize] & (1 << bit_index) > 0
-    }
-
-    /// Find the first free block in the bitmap.
-    fn find_free(&self) -> Option<u32> {
-        for (arr_idx, bits) in self.arr.iter().enumerate() {
-            if bits != &u32::MAX {
-                let res = (!bits).trailing_zeros();
-                logln!("[FS] find free found at {arr_idx} {res}");
-                return Some(arr_idx as u32 * 32 + res);
-            }
-        }
-
-        None
-    }
-}
-
-// TODO(mt): make it impossible to re-call init and break things.
 static FS: spin::Mutex<LockedFilesystem> = spin::Mutex::new(LockedFilesystem::new());
-
-use core::cell::UnsafeCell;
+static FS_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
 struct LockedFilesystem {
     inner: UnsafeCell<Option<Filesystem>>,
@@ -415,276 +334,29 @@ impl LockedFilesystem {
     pub fn inner(&mut self) -> &mut Filesystem {
         self.inner.get_mut().as_mut().unwrap()
     }
-}
 
-mod fs {
-    use super::{INode, ramdisk};
-    use core::mem;
-
-    use super::*;
-
-    /// Writes the superblock to block_index 0
-    pub fn write_superblock(superblock: &SuperBlock) {
-        let mut buf = [0u8; BLOCK_SIZE];
-        buf[0..mem::size_of::<SuperBlock>()].copy_from_slice(&superblock.to_bytes());
-        ramdisk::write_block(BlockIndex(0), &buf).unwrap();
+    pub fn mkdir(&mut self, name: &str) -> Result<(), Error> {
+        self.inner.get_mut().as_mut().unwrap().mkdir(name)
     }
 
-    /// Reads the superblock from block_index 0
-    pub fn read_superblock() -> SuperBlock {
-        let mut buf = [0u8; BLOCK_SIZE];
-        ramdisk::read_block(BlockIndex(0), &mut buf).unwrap();
-        let superblock = SuperBlock::from_bytes(&buf[0..mem::size_of::<SuperBlock>()]);
-
-        if superblock.magic == MAGIC {
-            superblock
-        } else {
-            SuperBlock::default_superblock()
-        }
+    fn dump_dir(&mut self, index: u32) {
+        self.inner.get_mut().as_mut().unwrap().dump_dir(index)
     }
 
-    /// Writes an `INode` into the block at the specific offset into the inode
-    /// blocks.
-    fn write_inode_inner(inode_index: INodeIndex, inode: &INode) {
-        // Creating the buffer to write the INode to.
-        let mut buf = [0u8; BLOCK_SIZE];
-
-        // Calculate the `BlockIndex` and the `ByteOffset` for the `INode`
-        // to be written to.
-        let (block_index, byte_offset) = inode_index.to_block_index();
-
-        // Reading the block into `buf` to append the `INode` to it.
-        ramdisk::read_block(block_index, &mut buf).unwrap();
-
-        // Calculating the byte_offset inside of the block.
-        logln!("[FS] Writing to block index {block_index:?} at byte_offset={byte_offset:?}");
-
-        buf[byte_offset.range::<INode>()].copy_from_slice(inode.to_bytes().as_slice());
-
-        // Writing the block to memory.
-        ramdisk::write_block(block_index, &buf).unwrap();
+    fn create_empty_root(&mut self) {
+        self.inner.get_mut().as_mut().unwrap().create_empty_root();
     }
 
-    /// Writes a new `INode` to the ramdisk.
-    pub(crate) fn write_inode(inode: &INode) -> INodeIndex {
-        // Finds the next free block in the `INodeBitmap`.
-        let free_block = INodeIndex((*FS.lock()).inner().inode_bitmap.find_free().unwrap());
-
-        logln!("[FS] Writing INode to next_free_block={free_block:?}");
-
-        // Set this block to be used.
-        (*FS.lock()).inner().inode_bitmap.set(free_block.0);
-
-        // Write the `INode` to the block
-        write_inode_inner(free_block, inode);
-
-        free_block
+    fn write_to_file(&mut self, inode_index: INodeIndex, text: &str) {
+        self.inner
+            .get_mut()
+            .as_mut()
+            .unwrap()
+            .write_to_file(inode_index, text);
     }
 
-    /// Read the `INode` at offset
-    pub(crate) fn read_inode_inner(inode_index: INodeIndex) -> INode {
-        let mut buf = [0u8; BLOCK_SIZE];
-        let (block_index, byte_offset) = inode_index.to_block_index();
-        ramdisk::read_block(block_index, &mut buf).unwrap();
-        INode::from_bytes(&buf[byte_offset.range::<INode>()])
-    }
-
-    pub(crate) fn update_inode(inode_index: INodeIndex, inode: &INode) {
-        write_inode_inner(inode_index, inode);
-    }
-
-    /// Writing a `DirEntry` needs to check if the `INode` already has a block
-    /// which has some free space and we can write the new `DirEntry` to that
-    /// block. If not then we need to allocate a new block and attach this to
-    /// the `INode`.
-    ///
-    /// TODO(mt): here we're modifying the INode and not the memory on the
-    /// ramdisk. This is fine as long as we store some Nodes locally but
-    /// eventually we need to write them to memory.
-    pub(crate) fn write_dir_entry(entry: DirEntry, inode: &mut INode) {
-        let mut buf = [0u8; BLOCK_SIZE];
-
-        // Calculate the currently used entries based on the size of the `INode`
-        let current_entries = inode.size as usize / mem::size_of::<DirEntry>();
-
-        // Get the index into the blocks of the `INode`
-        let inode_internal_block_index = current_entries / DIR_ENTRY_PER_BLOCK;
-
-        logln!("[FS] Writing DirEntry {entry:?} at block_index={inode_internal_block_index:?}");
-
-        if inode_internal_block_index > 16 {
-            panic!("Can not hold more than 16 blocks of DirEntries");
-        }
-
-        // println!("** {inode_internal_block_index}");
-
-        if inode.blocks[inode_internal_block_index].0 == 0 {
-            let free = (*FS.lock()).inner().data_bitmap.find_free().unwrap();
-            let free = DataBlockIndex(free);
-            inode.blocks[inode_internal_block_index] = free;
-            (*FS.lock()).inner().data_bitmap.set(free.0);
-        }
-
-        let data_block_index = inode.blocks[inode_internal_block_index];
-
-        // println!("** {data_block_index:?}");
-        // Get the offset inside of this block
-        let offset_in_block = (current_entries % DIR_ENTRY_PER_BLOCK) * mem::size_of::<DirEntry>();
-
-        let block_index = data_block_index.to_block_index();
-
-        // Read this block into `buf`.
-        ramdisk::read_block(block_index, &mut buf).unwrap();
-
-        // Write `DirEntry` into the `buf`.
-        buf[offset_in_block..offset_in_block + mem::size_of::<DirEntry>()]
-            .copy_from_slice(entry.to_bytes().as_slice());
-
-        // Write `buf` to memory.
-        ramdisk::write_block(block_index, &buf).unwrap();
-
-        // Increment the `size` by the size of the `DirEntry`.
-        inode.size += mem::size_of::<DirEntry>() as u32;
-    }
-
-    /// Reads all the directory entries for that INode and returns them as a
-    /// Vec.
-    pub(crate) fn read_dir_entry(inode: &INode) -> Vec<DirEntry> {
-        if inode.size == 0 {
-            return Vec::new();
-        }
-
-        let max_items = inode.size as usize / mem::size_of::<DirEntry>();
-        let mut res = Vec::with_capacity(max_items);
-        let mut buf = [0u8; BLOCK_SIZE];
-        let mut offset = 0;
-
-        let mut read_items = 0;
-
-        // This loop is safe as the size of
-        while read_items < max_items {
-            let data_block_index = inode.blocks[read_items];
-            let block_index = data_block_index.to_block_index();
-
-            // Read the block into `buf`.
-            ramdisk::read_block(block_index, &mut buf).unwrap();
-
-            // Read all the entries of that block.
-            while read_items < max_items {
-                let entry = DirEntry::from_bytes(&buf[offset..offset + mem::size_of::<DirEntry>()]);
-                offset += mem::size_of::<DirEntry>();
-                res.push(entry);
-                read_items += 1;
-            }
-        }
-
-        res
-    }
-
-    /// To create a new directory, we need to know about the parent directory.
-    /// We can do this either via the INode, or the index of the INode.
-    ///
-    /// For now let's only allow complete paths inside of the root directory.
-    ///
-    /// Creating a new directory, we need to do a couple of things:
-    /// 1. Create a new INode for that new directory.
-    /// 2. Write a `DirEntry` to the parents data blocks.
-    /// 3. Create the two directories '.' & '..' for the new directory and
-    pub(crate) fn mkdir(name: String) {
-        println!("===== Creating directory {name} =====");
-
-        // Get the `INode` of the root directory.
-
-        // Start traversing at root
-        let mut current = fs::read_inode_inner(INodeIndex(0));
-        let mut current_index = INodeIndex(0);
-        let mut prev_index = INodeIndex(0);
-        let mut prev = None;
-
-        let mut peekable_iter = name.split('/').skip(1).peekable();
-
-        // Iterate over all the nested directories skipping the first empty
-        // entry.
-        while let Some(entry) = peekable_iter.next() {
-            println!("Looking for path: {entry:?} in {current_index:?}");
-            let is_last = peekable_iter.peek().is_none();
-            let entries = fs::read_dir_entry(&current);
-
-            let cmp = |bytes: &[u8]| -> bool {
-                let len = bytes.iter().take_while(|&&b| b != 0).count();
-                let offset = if bytes[0] == b'/' { 1 } else { 0 };
-                entry.as_bytes() == &bytes[offset..len]
-            };
-
-            if let Some(next_dir) = entries.iter().find(|e| cmp(&e.name[..])) {
-                if is_last {
-                    panic!("Duplicated directory: {name} with {next_dir:?}");
-                } else {
-                    println!("** Found match {next_dir:?}");
-                    prev.replace(current);
-                    prev_index = current_index;
-                    current = fs::read_inode_inner(next_dir.inode);
-                    current_index = next_dir.inode;
-                    println!(
-                        "Found matching subdirectory at {} = inode={:?}",
-                        next_dir.name(),
-                        next_dir.inode
-                    );
-                }
-            } else {
-                if is_last {
-                    // Create the `INode` for the new empty directory.
-                    let mut new_inode = INode::empty_directory();
-                    // Write that `INode` to disk to get the index.
-                    let inode_index = fs::write_inode(&new_inode);
-                    // Create a `DirEntry` with `name` for the new directory and link it
-                    // to root. TODO(mt): also should not be root here.
-                    let new_directory = DirEntry::new(entry.to_string(), inode_index);
-                    fs::write_dir_entry(new_directory, &mut current);
-                    fs::update_inode(current_index, &current);
-
-                    // Create the "." & ".." directories referencing the current & root
-                    // directory.
-                    let this = DirEntry::new(String::from("."), inode_index);
-                    let parent = DirEntry::new(String::from(".."), prev_index);
-                    fs::write_dir_entry(this, &mut new_inode);
-                    fs::write_dir_entry(parent, &mut new_inode);
-                    // Update the `INode` after adding the `DirEntries` to it.
-                    fs::update_inode(inode_index, &new_inode);
-
-                    println!("Created new directory {name} at inode {inode_index:?}");
-
-                    break;
-                } else {
-                    panic!("Subdirectory doens't exist {name} entry={entry}");
-                }
-            }
-        }
-
-        println!("========================================");
-
-        // Write the new directories `INode` into the data block of the root
-        // directory
-        // fs::write_dir_entry(new_directory, &mut root_directory_inode);
-        // fs::update_inode(0, &root_directory_inode);
-    }
-
-    pub(crate) fn create_empty_root() {
-        // Create the root INode
-        let mut root_inode = INode::empty_directory();
-
-        let root_inode_index = fs::write_inode(&root_inode);
-
-        // Create the default directories in the root directory.
-        let this = DirEntry::new(String::from("."), root_inode_index);
-        let this_too = DirEntry::new(String::from(".."), root_inode_index);
-
-        fs::write_dir_entry(this, &mut root_inode);
-        fs::write_dir_entry(this_too, &mut root_inode);
-
-        fs::update_inode(root_inode_index, &root_inode);
-
-        logln!("[FS] Filesystem initialized with empty root directory");
+    pub fn read_file(&mut self, inode_index: INodeIndex) -> String {
+        self.inner.get_mut().as_mut().unwrap().read_file(inode_index)
     }
 }
 
@@ -698,7 +370,70 @@ mod fs {
 pub struct Filesystem {
     inode_bitmap: Bitmap<INODE_BITMAP_SIZE>,
     data_bitmap: Bitmap<DATA_BITMAP_SIZE>,
-    // TODO(mt): add caches for INodes etc here, then write them periodically and before shutdown - same as superblock.
+    inode_cache: INodeCache,
+}
+
+struct INodeCache {
+    /// A `vec` holding all used `INodes` mapped by their `INodeIndex`. If an
+    /// `INode` has not been read yet, the value in it's spot is `None`.
+    inodes: Vec<Option<INode>>,
+    // TODO(mt): store dirty nodes to know what to flush periodically.
+}
+
+impl INodeCache {
+    pub const fn new() -> Self {
+        Self { inodes: Vec::new() }
+    }
+
+    /// Reads the `INode` from disk if it's not already in the cache.
+    fn read_from_disk(index: INodeIndex) -> INode {
+        let mut buf = [0u8; BLOCK_SIZE];
+        let (block_index, byte_offset) = index.to_block_index();
+        ramdisk::read_block(block_index, &mut buf);
+        INode::from_bytes(&buf[byte_offset.range::<INode>()])
+    }
+
+    /// Get a `&INode` from the cache, fetching it from disk when not present.
+    pub fn get(&mut self, index: INodeIndex) -> &INode {
+        if self.inodes.len() <= index.0 as usize {
+            self.inodes
+                .resize_with(index.0 as usize + 1, Default::default);
+        }
+
+        if self.inodes[index.0 as usize].is_none() {
+            self.inodes[index.0 as usize] = Some(Self::read_from_disk(index));
+        }
+
+        self.inodes.get(index.0 as usize).unwrap().as_ref().unwrap()
+    }
+
+    /// Get a `&mut INode` from the cache, fetching it from disk when not
+    /// present.
+    pub fn get_mut(&mut self, index: INodeIndex) -> &mut INode {
+        if self.inodes.len() <= index.0 as usize {
+            self.inodes
+                .resize_with(index.0 as usize + 1, Default::default);
+        }
+
+        if self.inodes[index.0 as usize].is_none() {
+            self.inodes[index.0 as usize] = Some(Self::read_from_disk(index));
+        }
+
+        self.inodes
+            .get_mut(index.0 as usize)
+            .unwrap()
+            .as_mut()
+            .unwrap()
+    }
+
+    pub fn register_new_inode(&mut self, index: INodeIndex, inode: INode) {
+        if self.inodes.len() <= index.0 as usize {
+            self.inodes
+                .resize_with(index.0 as usize + 1, Default::default);
+        }
+
+        self.inodes[index.0 as usize] = Some(inode);
+    }
 }
 
 impl Filesystem {
@@ -706,6 +441,7 @@ impl Filesystem {
         Self {
             inode_bitmap: Bitmap::<INODE_BITMAP_SIZE>::new(),
             data_bitmap: Bitmap::<DATA_BITMAP_SIZE>::new(),
+            inode_cache: INodeCache::new(),
         }
     }
 
@@ -720,8 +456,387 @@ impl Filesystem {
     fn init_from_superblock(_superblock: SuperBlock) -> Self {
         Self::new()
     }
+
+    /// Writes an `INode` to `ramdisk`.
+    fn write_inode_to_disk(&self, inode_index: INodeIndex, inode: &INode) {
+        // Creating the buffer to write the INode to.
+        let mut buf = [0u8; BLOCK_SIZE];
+
+        // Calculate the `BlockIndex` and the `ByteOffset` for the `INode`
+        // to be written to.
+        let (block_index, byte_offset) = inode_index.to_block_index();
+
+        // Reading the block into `buf` to append the `INode` to it.
+        ramdisk::read_block(block_index, &mut buf);
+
+        // Calculating the byte_offset inside of the block.
+        logln!("[FS] Writing to block index {block_index:?} at byte_offset={byte_offset:?}");
+
+        buf[byte_offset.range::<INode>()].copy_from_slice(inode.to_bytes().as_slice());
+
+        // Writing the block to memory.
+        ramdisk::write_block(block_index, &buf);
+    }
+
+    /// Writes a new `INode` to the ramdisk.
+    fn new_inode(&mut self, inode: &INode) -> INodeIndex {
+        // Finds the next free block in the `INodeBitmap`.
+        let free = INodeIndex(self.inode_bitmap.find_free().unwrap());
+
+        logln!("[FS] Writing INode to {free:?}");
+
+        // Set this block to be used.
+        self.inode_bitmap.set(free.0);
+
+        // Write the `INode` to the block.
+        self.write_inode_to_disk(free, inode);
+
+        // Make the cache aware of this `INode`.
+        self.inode_cache.register_new_inode(free, *inode);
+
+        free
+    }
+
+    fn mkdir(&mut self, name: &str) -> Result<(), Error> {
+        // Start traversing at root
+        let mut current_index = INodeIndex(0);
+        let mut prev_index = INodeIndex(0);
+
+        let mut peekable_iter = name.split('/').skip(1).peekable();
+
+        // Iterate over all the nested directories skipping the first empty
+        // entry.
+        while let Some(entry) = peekable_iter.next() {
+            let is_last = peekable_iter.peek().is_none();
+            let entries = self.read_dir_entry(current_index);
+
+            let cmp = |bytes: &[u8]| -> bool {
+                let len = bytes.iter().take_while(|&&b| b != 0).count();
+                let offset = if bytes[0] == b'/' { 1 } else { 0 };
+                entry.as_bytes() == &bytes[offset..len]
+            };
+
+            if let Some(next_dir) = entries.iter().find(|e| cmp(&e.name[..])) {
+                if is_last {
+                    return Err(Error::DuplicatedDirectory);
+                }
+                logln!("** Found match {next_dir:?}");
+                prev_index = current_index;
+                current_index = next_dir.inode;
+                logln!(
+                    "Found matching subdirectory at {} = inode={:?}",
+                    next_dir.name(),
+                    next_dir.inode);
+            } else {
+                if is_last {
+                    // Create the `INode` for the new empty directory or file.
+                    let new_inode = if name.contains(".txt") {
+                        INode::empty_file()
+                    } else {
+                        INode::empty_directory()
+                    };
+
+                    // Write that `INode` to disk to get the index.
+                    let inode_index = self.new_inode(&new_inode);
+
+                    // Create a `DirEntry` with `name` for the new directory and link it
+                    // to root.
+                    let new_directory = DirEntry::new(entry.to_string(), inode_index);
+
+                    self.write_dir_entry(new_directory, current_index).unwrap();
+
+                    // Create the "." & ".." directories referencing the current & root
+                    // directory if this is a directory.
+                    if new_inode.is_directory {
+                        let this = DirEntry::new(String::from("."), inode_index);
+                        let parent = DirEntry::new(String::from(".."), prev_index);
+                        self.write_dir_entry(this, inode_index).unwrap();
+                        self.write_dir_entry(parent, inode_index).unwrap();
+                        println!("Created new directory {name} at inode {inode_index:?}");
+                    } else {
+                        println!("Created new file {name} at inode {inode_index:?}");
+                    }
+
+
+                    break;
+                } else {
+                    return Err(Error::DirectoryDoesNotExist);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Writing a `DirEntry` needs to check if the `INode` already has a block
+    /// which has some free space and we can write the new `DirEntry` to that
+    /// block. If not then we need to allocate a new block and attach this to
+    /// the `INode`.
+    pub(crate) fn write_dir_entry(
+        &mut self,
+        entry: DirEntry,
+        inode_index: INodeIndex,
+    ) -> Result<(), Error> {
+        let mut buf = [0u8; BLOCK_SIZE];
+
+        let inode = self.inode_cache.get_mut(inode_index);
+
+        // Calculate the currently used entries based on the size of the `INode`
+        let current_entries = inode.size as usize / mem::size_of::<DirEntry>();
+
+        // Get the index into the blocks of the `INode`
+        let inode_internal_block_index = current_entries / DIR_ENTRY_PER_BLOCK;
+
+        logln!("[FS] Writing DirEntry {entry:?} at block_index={inode_internal_block_index:?}");
+
+        if inode_internal_block_index > 16 {
+            return Err(Error::NoSpaceForDirEntry);
+        }
+
+        if inode.blocks[inode_internal_block_index].0 == 0 {
+            let free = self.data_bitmap.find_free().unwrap();
+            let free = DataBlockIndex(free);
+            inode.blocks[inode_internal_block_index] = free;
+            self.data_bitmap.set(free.0);
+        }
+
+        let data_block_index = inode.blocks[inode_internal_block_index];
+
+        // Get the offset inside of this block
+        let offset_in_block = (current_entries % DIR_ENTRY_PER_BLOCK) * mem::size_of::<DirEntry>();
+
+        let block_index = data_block_index.to_block_index();
+
+        // Read this block into `buf`.
+        ramdisk::read_block(block_index, &mut buf);
+
+        // Write `DirEntry` into the `buf`.
+        buf[offset_in_block..offset_in_block + mem::size_of::<DirEntry>()]
+            .copy_from_slice(entry.to_bytes().as_slice());
+
+        // Write `buf` to memory.
+        ramdisk::write_block(block_index, &buf);
+
+        // Increment the `size` by the size of the `DirEntry`.
+        inode.size += mem::size_of::<DirEntry>() as u32;
+
+        Ok(())
+    }
+
+    /// Reads all the directory entries for that INode and returns them as a
+    /// Vec.
+    pub(crate) fn read_dir_entry(&mut self, inode_index: INodeIndex) -> Vec<DirEntry> {
+        // Get the `INode`
+        let inode = self.inode_cache.get(inode_index);
+
+        // If the `INode` is empty there is nothing to do here.
+        if inode.size == 0 {
+            return Vec::new();
+        }
+
+        // Calculate the number of `DirEntry`s that this `INode` is holding.
+        let max_items = inode.size as usize / mem::size_of::<DirEntry>();
+
+        let mut res = Vec::with_capacity(max_items);
+        let mut buf = [0u8; BLOCK_SIZE];
+        let mut offset = 0;
+
+        let mut read_items = 0;
+
+        // Loop and read all `DirEntry`s into `res`.
+        while read_items < max_items {
+            let data_block_index = inode.blocks[read_items];
+            let block_index = data_block_index.to_block_index();
+
+            // Read the block into `buf`.
+            ramdisk::read_block(block_index, &mut buf);
+
+            // Read all the entries of that block.
+            while read_items < max_items {
+                let entry = DirEntry::from_bytes(&buf[offset..offset + mem::size_of::<DirEntry>()]);
+                offset += mem::size_of::<DirEntry>();
+                res.push(entry);
+                read_items += 1;
+            }
+        }
+
+        res
+    }
+
+    pub(crate) fn create_empty_root(&mut self) {
+        // Create the root INode.
+        let root_inode = INode::empty_directory();
+
+        // Write the node to disk to get the `INodeIndex`.
+        let root_inode_index = self.new_inode(&root_inode);
+
+        // Create the default directories in the root directory.
+        let this = DirEntry::new(String::from("."), root_inode_index);
+        let this_too = DirEntry::new(String::from(".."), root_inode_index);
+
+        self.write_dir_entry(this, root_inode_index).unwrap();
+        self.write_dir_entry(this_too, root_inode_index).unwrap();
+
+        logln!("[FS] Filesystem initialized with empty root directory");
+    }
+
+    // /// Appends the `bytes` to the content of the file pointed to by
+    // /// `inode_index`.
+    // fn write_to_file_inner(&mut self, inode_index: INodeIndex, text: &[u8]) {
+    //     let inode = self.inode_cache.get_mut(inode_index);
+
+    //     if inode.is_directory {
+    //         panic!("Can't write to directory");
+    //     }
+
+    //     let inode_internal_block_index = inode.size as usize / BLOCK_SIZE;
+
+    //     if inode_internal_block_index > 16 {
+    //         panic!("no more space for file");
+    //     }
+
+    //     if inode.blocks[inode_internal_block_index].0 == 0 {
+    //         let free = self.data_bitmap.find_free().unwrap();
+    //         let free = DataBlockIndex(free);
+    //         inode.blocks[inode_internal_block_index] = free;
+    //         self.data_bitmap.set(free.0);
+    //     }
+
+    //     let data_block_index = inode.blocks[inode_internal_block_index];
+    //     let byte_offset = inode.size % BLOCK_SIZE as u32;
+    //     let block_index = data_block_index.to_block_index();
+
+    //     let mut buf = [0u8; BLOCK_SIZE];
+
+    //     ramdisk::read_block(block_index, &mut buf);
+
+    //     buf[byte_offset as usize..byte_offset as usize + text.len()]
+    //         .copy_from_slice(text.as_bytes());
+
+    //     // TODO(mt): handle overflow to write to multiple blocks.
+
+    //     ramdisk::write_block(block_index, &buf);
+
+    //     inode.size += text.len() as u32;
+    // }
+
+    pub fn write_to_file(&mut self, inode_index: INodeIndex, text: &str) {
+        let inode = self.inode_cache.get_mut(inode_index);
+
+        if inode.is_directory {
+            panic!("Can't write to directory");
+        }
+
+        let mut buf = [0u8; BLOCK_SIZE];
+        let mut total_bytes = text.len();
+        let mut bytes_written = 0;
+
+        while total_bytes > 0 {
+            let last_used_block_index = inode.size as usize / BLOCK_SIZE;
+
+            if last_used_block_index > 16 {
+                panic!("no more space for file");
+            }
+
+            if inode.blocks[last_used_block_index].0 == 0 {
+                let free = self.data_bitmap.find_free().unwrap();
+                let free = DataBlockIndex(free);
+                inode.blocks[last_used_block_index] = free;
+                self.data_bitmap.set(free.0);
+            }
+
+            let data_block_index = inode.blocks[last_used_block_index];
+            let byte_offset = inode.size % BLOCK_SIZE as u32;
+
+            let bytes_to_write = total_bytes.min(BLOCK_SIZE - byte_offset as usize);
+            println!("Writing {}/{} bytes", bytes_to_write, total_bytes);
+
+
+            let block_index = data_block_index.to_block_index();
+
+            ramdisk::read_block(block_index, &mut buf);
+
+            buf[byte_offset as usize..byte_offset as usize + bytes_to_write]
+                .copy_from_slice(&text.as_bytes()[bytes_written..bytes_written + bytes_to_write]);
+
+            ramdisk::write_block(block_index, &buf);
+            inode.size += text.len() as u32;
+
+            total_bytes -= bytes_to_write;
+            bytes_written += bytes_to_write;
+        }
+    }
+
+    pub fn read_file(&mut self, inode_index: INodeIndex) -> String {
+        let inode = self.inode_cache.get_mut(inode_index);
+
+        if inode.is_directory {
+            panic!("Can't write to directory");
+        }
+
+
+        let mut buf = [0u8; BLOCK_SIZE];
+
+        let mut total_bytes = inode.size as usize;
+        let mut string = String::with_capacity(total_bytes);
+
+        for block in inode.blocks {
+            let b = block.to_block_index();
+            ramdisk::read_block(b, &mut buf);
+
+            let valid_bytes = total_bytes.min(BLOCK_SIZE);
+            total_bytes -= valid_bytes;
+
+            string.push_str(&String::from_utf8(buf[..valid_bytes].to_vec()).unwrap());
+        }
+
+        string
+
+    }
+
+    /// Writes the superblock to block_index 0
+    pub fn write_superblock(&self, superblock: &SuperBlock) {
+        let mut buf = [0u8; BLOCK_SIZE];
+        buf[0..mem::size_of::<SuperBlock>()].copy_from_slice(&superblock.to_bytes());
+        ramdisk::write_block(BlockIndex(0), &buf);
+    }
+
+    /// Reads the superblock from block_index 0
+    pub fn read_superblock() -> SuperBlock {
+        let mut buf = [0u8; BLOCK_SIZE];
+        ramdisk::read_block(BlockIndex(0), &mut buf);
+        let superblock = SuperBlock::from_bytes(&buf[0..mem::size_of::<SuperBlock>()]);
+
+        if superblock.magic == MAGIC {
+            superblock
+        } else {
+            SuperBlock::default_superblock()
+        }
+    }
+
+    fn dump_dir(&mut self, index: u32) {
+        let inode_index = INodeIndex(index);
+        let mut buf = [0u8; BLOCK_SIZE];
+
+        let inode = self.inode_cache.get(inode_index);
+        assert!(inode.is_directory);
+
+        for &block in inode.blocks.iter().filter(|&&b| b.0 > 0) {
+            ramdisk::read_block(block.to_block_index(), &mut buf);
+
+            for i in 0..DIR_ENTRY_PER_BLOCK {
+                let entry = DirEntry::from_bytes(&buf[i * mem::size_of::<DirEntry>()..]);
+
+                // only print the directories that have a name
+                if entry.name.iter().any(|c| *c != 0) {
+                    println!("\t{entry:?}");
+                }
+            }
+        }
+    }
 }
 
+/// Memmory dump of all the blocks. Handy for debugging.
 pub fn dump() {
     let mut buf = [0u8; BLOCK_SIZE];
     let total = ramdisk::total_blocks() as u32;
@@ -733,9 +848,7 @@ pub fn dump() {
     );
 
     for block_idx in 0u32..total {
-        if ramdisk::read_block(BlockIndex(block_idx), &mut buf).is_err() {
-            continue;
-        }
+        ramdisk::read_block(BlockIndex(block_idx), &mut buf);
 
         // Skip empty blocks
         if buf.iter().all(|&b| b == 0) {
@@ -779,47 +892,66 @@ pub fn dump() {
     println!("\n=== END DUMP ===");
 }
 
-pub fn dump_dir(index: u32) {
-    let inode_index = INodeIndex(index);
-    let mut buf = [0u8; BLOCK_SIZE];
+/// Those functions are wrappers around the `LockedFilesystem` for the shell
+/// to do some filesystem operations.
+///
+/// This is the only place where the `.lock()` should be called to avoid
+/// deadlocks.
+pub(crate) mod api {
+    use super::*;
 
-    let inode = fs::read_inode_inner(inode_index);
-    assert!(inode.is_directory);
+    pub fn dump_dir(index: u32) {
+        (*FS.lock()).dump_dir(index);
+    }
 
-    for &block in inode.blocks.iter().filter(|&&b| b.0 > 0) {
-        ramdisk::read_block(block.to_block_index(), &mut buf).unwrap();
-
-        for i in 0..DIR_ENTRY_PER_BLOCK {
-            let entry = DirEntry::from_bytes(&buf[i * mem::size_of::<DirEntry>()..]);
-
-            // only print the directories that have a name
-            if entry.name.iter().any(|c| *c != 0) {
-                println!("\t{entry:?}");
+    pub fn mkdir(name: String) {
+        match (*FS.lock()).mkdir(&name) {
+            Ok(_) => {
+                logln!("Successfully created directory: \"{name}\"");
+            }
+            Err(e) => {
+                println!("mkdir failed: {e:?}");
             }
         }
     }
 
-}
+    pub fn write_to_file(inode_index: usize, text: String) {
+        (*FS.lock()).write_to_file(INodeIndex(inode_index as u32), &text);
+    }
 
-pub fn mkdir(name: String) {
-    fs::mkdir(name);
+    pub fn read_file(inode_index: usize) -> String {
+        (*FS.lock()).read_file(INodeIndex(inode_index as u32))
+    }
 }
 
 /// Initializes the Filesystem by reading the superblock or defaulting it
 /// if it doesn't exist.
 pub fn init() {
-    let superblock = fs::read_superblock();
+    // Guard against re-initializing the Filesystem by setting the atomic
+    // flag.
+    if FS_INITIALIZED
+        .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
+        .is_err()
+    {
+        logln!("Not initializing the Filesystem again!");
+        return;
+    }
+
+    let superblock = Filesystem::read_superblock();
     let filesystem = Filesystem::init_from_superblock(superblock);
 
     (*FS.lock()).init(filesystem);
-    fs::create_empty_root();
+    (*FS.lock()).create_empty_root();
 
-    dump_dir(4)
+    (FS.lock()).mkdir("/test-file.txt").unwrap();
+
+    let mut s = String::new();
+
+    for _ in 0..511 {
+        s.push('A');
+    }
+
+    (*FS.lock()).write_to_file(INodeIndex(1), &s);
+
+    // dump();
 }
-
-/*
-TODO(mt)
-    * load from disk on startup
-    * cache things in memory and write to disk periodically
-    * catch a shutdown and flush to disk
-*/

@@ -1,10 +1,12 @@
 extern crate alloc;
-use core::{arch::asm, str::FromStr};
+use core::str::FromStr;
 
 use crate::dump_memory;
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
+
+use crate::timer;
 
 use crate::{print, println};
 
@@ -96,11 +98,9 @@ fn benchmark_allocator(n: usize, size: usize) {
     use alloc::vec::Vec;
 
     let mut allocations: Vec<Vec<u8>> = Vec::new();
-    let start: usize;
 
-    unsafe { asm!("rdtime {}", out(reg) start) };
     let freq = crate::device_tree::timer_frequency() / 1000;
-    let start = start / freq;
+    let start = timer::rdtime() / freq;
 
     // Current memory size is 1024Kb
     for _ in 0..n {
@@ -112,9 +112,7 @@ fn benchmark_allocator(n: usize, size: usize) {
         drop(alloc);
     }
 
-    let end: usize;
-    unsafe { asm!("rdtime {}", out(reg) end) };
-    let end = end / freq;
+    let end = timer::rdtime() / freq;
 
     println!("Took: {}ms", end - start);
 }
@@ -131,6 +129,9 @@ enum ShellCommand {
     Bench { n: usize, size: usize },
     Ls { dir: u32 }, // INodeIndex for now
     Mkdir { name: String },
+    DumpFs,
+    Write { inode_index: usize, text: String },
+    Cat { inode_index: usize }
 }
 
 impl ShellCommand {
@@ -173,12 +174,28 @@ impl ShellCommand {
                 if !name.starts_with("/") {
                     name.insert(0, '/');
                 }
-                
+
                 ShellCommand::Mkdir { name }
             }
             "ls" => {
-                let dir = parts.get(1).and_then(|secs| secs.parse().ok()).unwrap_or_default();
+                let dir = parts
+                    .get(1)
+                    .and_then(|secs| secs.parse().ok())
+                    .unwrap_or_default();
                 ShellCommand::Ls { dir }
+            }
+            "dumpfs" => ShellCommand::DumpFs,
+            "write" => {
+                let (inode_index, rest) = parts.split_at(2);
+
+                ShellCommand::Write {
+                    inode_index: inode_index[1].parse().unwrap(),
+                    text: rest.join(" "),
+                }
+            }
+            "cat" => {
+                let inode_index = parts.get(1).and_then(|n| n.parse().ok())?;
+                ShellCommand::Cat { inode_index, }
             }
             _ => return None,
         };
@@ -196,11 +213,19 @@ impl ShellCommand {
             ShellCommand::Bench { n, size } => benchmark_allocator(*n, *size),
             Self::Allocate { size } => shell_allocate(*size),
             ShellCommand::Timer { secs } => crate::timer::new_time(*secs),
-            ShellCommand::Ls { dir } => crate::filesystem::dump_dir(*dir),
-            ShellCommand::Mkdir { name } => crate::filesystem::mkdir(name.clone()),
+            ShellCommand::Ls { dir } => crate::filesystem::api::dump_dir(*dir),
+            ShellCommand::Mkdir { name } => crate::filesystem::api::mkdir(name.clone()),
+            ShellCommand::DumpFs => crate::filesystem::dump(),
+            ShellCommand::Cat { inode_index }  => {
+                let output = crate::filesystem::api::read_file(*inode_index);
+                println!("{output}");
+            }
             ShellCommand::Uptime => {
                 let time = crate::timer::uptime();
                 println!("Currently running for {time}s");
+            }
+            ShellCommand::Write { inode_index, text } => {
+                crate::filesystem::api::write_to_file(*inode_index, text.clone())
             }
         }
     }
