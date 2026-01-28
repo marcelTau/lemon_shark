@@ -54,7 +54,6 @@ extern "C" fn _start(_: usize, device_table_addr: usize) -> ! {
     device_tree::init(device_table_addr);
 
     filesystem::init();
-    filesystem::init();
 
     shell::shell()
 }

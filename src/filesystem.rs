@@ -32,11 +32,12 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 pub(crate) use types::BlockIndex;
 
-#[derive(Debug)]
-pub(crate) enum Error {
-    DuplicatedDirectory,
+#[derive(Debug, PartialEq)]
+pub enum Error {
+    DuplicatedEntry,
     DirectoryDoesNotExist,
     NoSpaceForDirEntry,
+    NotAFile,
 }
 
 impl core::error::Error for Error {}
@@ -79,7 +80,7 @@ mod types {
 
     /// This is the actual index of the INode.
     #[derive(Debug, Copy, Clone)]
-    pub(crate) struct INodeIndex(pub u32);
+    pub struct INodeIndex(pub u32);
 
     impl INodeIndex {
         /// Returns the `BlockIndex` and the offset inside of the block for that
@@ -216,7 +217,8 @@ impl INode {
     }
 }
 
-/// The `DirEntry` contains metadata about a directory.
+/// The `DirEntry` contains metadata about an entry in a directory such as a
+/// file or another directory which is pointed to by the `INodeIndex`.
 #[repr(C)]
 pub struct DirEntry {
     /// Name of the directory
@@ -370,7 +372,12 @@ impl LockedFilesystem {
         *self.inner.get_mut() = Some(filesystem);
     }
 
-    pub fn mkdir(&mut self, name: &str) -> Result<(), Error> {
+    pub fn mkdir(&mut self, name: &str) -> Result<INodeIndex, Error> {
+        self.inner.get_mut().as_mut().unwrap().mkdir(name)
+    }
+
+    /// TODO(mt): create a new function to create a file or at least rename it.
+    pub fn create_file(&mut self, name: &str) -> Result<INodeIndex, Error> {
         self.inner.get_mut().as_mut().unwrap().mkdir(name)
     }
 
@@ -382,12 +389,12 @@ impl LockedFilesystem {
         self.inner.get_mut().as_mut().unwrap().create_empty_root();
     }
 
-    fn write_to_file(&mut self, inode_index: INodeIndex, bytes: &[u8]) {
+    fn write_to_file(&mut self, inode_index: INodeIndex, bytes: &[u8]) -> Result<usize, Error> {
         self.inner
             .get_mut()
             .as_mut()
             .unwrap()
-            .append_to_file(inode_index, bytes);
+            .append_to_file(inode_index, bytes)
     }
 
     pub(crate) fn read_file(&mut self, inode_index: INodeIndex) -> String {
@@ -522,7 +529,9 @@ impl Filesystem {
         // Finds the next free block in the `INodeBitmap`.
         let free = INodeIndex(self.inode_bitmap.find_free().unwrap());
 
-        logln!("[FS] Writing INode to {free:?}");
+
+
+        logln!("[FS] Writing INode to {free:?} in {:?}", self.inode_bitmap);
 
         // Set this block to be used.
         self.inode_bitmap.set(free.0);
@@ -536,7 +545,7 @@ impl Filesystem {
         free
     }
 
-    fn mkdir(&mut self, name: &str) -> Result<(), Error> {
+    fn mkdir(&mut self, name: &str) -> Result<INodeIndex, Error> {
         // Start traversing at root
         let mut current_index = INodeIndex(0);
         let mut prev_index = INodeIndex(0);
@@ -560,7 +569,7 @@ impl Filesystem {
                 .find(|e| cmp(&e.name[..]))
             {
                 if is_last {
-                    return Err(Error::DuplicatedDirectory);
+                    return Err(Error::DuplicatedEntry);
                 }
 
                 prev_index = current_index;
@@ -594,15 +603,14 @@ impl Filesystem {
                     } else {
                         println!("Created new file {name} at inode {inode_index:?}");
                     }
-
-                    break;
+                    return Ok(inode_index);
                 } else {
                     return Err(Error::DirectoryDoesNotExist);
                 }
             }
         }
 
-        Ok(())
+        panic!("what")
     }
 
     /// Writing a `DirEntry` needs to check if the `INode` already has a block
@@ -720,11 +728,11 @@ impl Filesystem {
         logln!("[FS] Filesystem initialized with empty root directory");
     }
 
-    fn append_to_file(&mut self, inode_index: INodeIndex, bytes: &[u8]) {
+    fn append_to_file(&mut self, inode_index: INodeIndex, bytes: &[u8]) -> Result<usize, Error> {
         let inode = self.inode_cache.get_mut(inode_index);
 
         if inode.is_directory {
-            panic!("Can't write to directory");
+            return Err(Error::NotAFile);
         }
 
         let mut buf = [0u8; BLOCK_SIZE];
@@ -760,6 +768,8 @@ impl Filesystem {
             total_bytes -= bytes_to_write;
             bytes_written += bytes_to_write;
         }
+
+        Ok(bytes_written)
     }
 
     pub(crate) fn read_file(&mut self, inode_index: INodeIndex) -> String {
@@ -890,7 +900,7 @@ pub fn dump() {
 ///
 /// This is the only place where the `.lock()` should be called to avoid
 /// deadlocks.
-pub(crate) mod api {
+pub mod api {
     use super::*;
 
     pub fn dump_dir(index: u32) {
@@ -908,8 +918,12 @@ pub(crate) mod api {
         }
     }
 
-    pub fn write_to_file(inode_index: usize, text: String) {
-        (*FS.lock()).write_to_file(INodeIndex(inode_index as u32), text.as_bytes());
+    pub fn create_file(name: String) -> Result<INodeIndex, Error> {
+        (*FS.lock()).create_file(&name)
+    }
+
+    pub fn write_to_file(inode_index: usize, text: String) -> Result<usize, Error> {
+        (*FS.lock()).write_to_file(INodeIndex(inode_index as u32), text.as_bytes())
     }
 
     pub fn read_file(inode_index: usize) -> String {
@@ -936,15 +950,17 @@ pub fn init() {
     (*FS.lock()).init(filesystem);
     (*FS.lock()).create_empty_root();
 
-    (FS.lock()).mkdir("/test-file.txt").unwrap();
+    // (FS.lock()).mkdir("/test-file.txt").unwrap();
 
-    let mut s = String::new();
+    // let mut s = String::new();
 
-    for _ in 0..511 {
-        s.push('A');
-    }
+    // for _ in 0..511 {
+    //     s.push('A');
+    // }
 
-    (*FS.lock()).write_to_file(INodeIndex(1), s.as_bytes());
+    // (*FS.lock()).write_to_file(INodeIndex(1), s.as_bytes());
+
+    logln!("Initialized Filesystem");
 
     // dump();
 }

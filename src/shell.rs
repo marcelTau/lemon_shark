@@ -225,7 +225,7 @@ impl ShellCommand {
                 println!("Currently running for {time}s");
             }
             ShellCommand::Write { inode_index, text } => {
-                crate::filesystem::api::write_to_file(*inode_index, text.clone())
+                crate::filesystem::api::write_to_file(*inode_index, text.clone()).unwrap();
             }
         }
     }
