@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
 
-use core::arch::{asm, global_asm};
+use core::arch::global_asm;
 use lemon_shark::{ALLOCATOR, device_tree, filesystem, interrupts, println, shell, trap_handler};
 
 // This is the section that we mapped first in the linker script `linker.ld`

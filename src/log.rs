@@ -14,6 +14,9 @@ pub struct UartWriter;
 
 impl core::fmt::Write for UartWriter {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        // extern crate alloc;
+        // use alloc::string::ToString;
+        // crate::filesystem::api::write_to_file(1, s.to_string());
         for c in s.bytes() {
             write_char_to_uart(c as char);
         }
@@ -26,6 +29,7 @@ pub fn _print(args: ::core::fmt::Arguments) {
     #[cfg(not(feature = "logging"))]
     return;
     use core::fmt::Write;
+
 
     if UartWriter.write_fmt(args).is_err() {
         // Fallback: write error message directly

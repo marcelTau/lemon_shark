@@ -273,6 +273,12 @@ impl DirEntry {
     }
 }
 
+#[derive(PartialEq)]
+enum Entry {
+    File,
+    Directory,
+}
+
 /// The `Superblock` contains counts & pointers to strucutres used and metadata
 /// about the state of the allocator.
 #[repr(C)]
@@ -374,13 +380,12 @@ impl LockedFilesystem {
         *self.inner.get_mut() = Some(filesystem);
     }
 
-    pub fn mkdir(&mut self, name: &str) -> Result<INodeIndex, Error> {
-        self.inner.get_mut().as_mut().unwrap().mkdir(name)
+    pub fn mkdir(&mut self, path: &str) -> Result<INodeIndex, Error> {
+        self.inner.get_mut().as_mut().unwrap().new_dir_entry(path, Entry::Directory)
     }
 
-    /// TODO(mt): create a new function to create a file or at least rename it.
-    pub fn create_file(&mut self, name: &str) -> Result<INodeIndex, Error> {
-        self.inner.get_mut().as_mut().unwrap().mkdir(name)
+    pub fn create_file(&mut self, path: &str) -> Result<INodeIndex, Error> {
+        self.inner.get_mut().as_mut().unwrap().new_dir_entry(path, Entry::File)
     }
 
     fn dump_dir(&mut self, index: u32) {
@@ -556,82 +561,71 @@ impl Filesystem {
         free
     }
 
-    fn mkdir(&mut self, name: &str) -> Result<INodeIndex, Error> {
+
+    fn byte_compare(s: &str, bytes: &[u8; 24]) -> bool {
+        let len = bytes.iter().take_while(|&&b| b != 0).count();
+        let offset = if bytes[0] == b'/' { 1 } else { 0 };
+        s.as_bytes() == &bytes[offset..len]
+    }
+
+    fn new_dir_entry(&mut self, name: &str, entry_type: Entry) -> Result<INodeIndex, Error> {
         // Start traversing at root
         let mut current_index = INodeIndex(0);
         let mut prev_index = INodeIndex(0);
 
-        let mut peekable_iter = name.split('/').skip(1).peekable();
+        let mut path: Vec<_> = name.split('/').skip(1).collect();
+        
+        // The new entry - last part of the path.
+        let new_entry = path.pop().unwrap();
 
-        // Iterate over all the nested directories skipping the first empty
-        // entry.
-        while let Some(entry) = peekable_iter.next() {
-            // Check if this is the last part of the path
-            let is_last = peekable_iter.peek().is_none();
-
-            let cmp = |bytes: &[u8]| -> bool {
-                let len = bytes.iter().take_while(|&&b| b != 0).count();
-                let offset = if bytes[0] == b'/' { 1 } else { 0 };
-                entry.as_bytes() == &bytes[offset..len]
-            };
-
+        // Walk the path until the target directory to add the `new_entry`.
+        for dir in &path {
+            // Check that this part of the path is valid.
             let dir_entries = self.read_dir_entry(current_index);
-
-            if let Some(next_dir) = self
-                .read_dir_entry(current_index)
+            let next = dir_entries
                 .iter()
-                .find(|e| cmp(&e.name[..]))
-            {
-                // If this is the end of the path and we found a directory
-                // with the same name then it's duplicated.
-                if is_last {
-                    return Err(Error::DuplicatedEntry);
-                }
+                .find(|e| Self::byte_compare(dir, &e.name)) 
+                .ok_or(Error::DirectoryDoesNotExist)?;
 
-                // check that the inode that we found is actually a directory
-                if !self.inode_cache.get(next_dir.inode).is_directory {
-                    return Err(Error::NotADirectory);
-                }
-
-                prev_index = current_index;
-                current_index = next_dir.inode;
-            } else {
-                if is_last {
-                    // Create the `INode` for the new empty directory or file.
-                    let new_inode = if name.contains(".txt") {
-                        INode::empty_file()
-                    } else {
-                        INode::empty_directory()
-                    };
-
-                    // Write that `INode` to disk to get the index.
-                    let inode_index = self.new_inode(&new_inode);
-
-                    // Create a `DirEntry` with `name` for the new directory and link it
-                    // to root.
-                    let new_directory = DirEntry::new(entry.to_string(), inode_index);
-
-                    self.write_dir_entry(new_directory, current_index).unwrap();
-
-                    // Create the "." & ".." directories referencing the current & root
-                    // directory if this is a directory.
-                    if new_inode.is_directory {
-                        let this = DirEntry::new(String::from("."), inode_index);
-                        let parent = DirEntry::new(String::from(".."), prev_index);
-                        self.write_dir_entry(this, inode_index).unwrap();
-                        self.write_dir_entry(parent, inode_index).unwrap();
-                        println!("Created new directory {name} at inode {inode_index:?}");
-                    } else {
-                        println!("Created new file {name} at inode {inode_index:?}");
-                    }
-                    return Ok(inode_index);
-                } else {
-                    return Err(Error::DirectoryDoesNotExist);
-                }
-            }
+            prev_index = current_index;
+            current_index = next.inode;
         }
 
-        panic!("what")
+        // Check that there is no entry with the same name.
+        if self.read_dir_entry(current_index)
+            .iter()
+            .any(|e| Self::byte_compare(&new_entry, &e.name))
+        {
+            return Err(Error::DuplicatedEntry);
+        }
+        
+        // Create new `INode`.
+        let new_inode = match entry_type {
+            Entry::File => INode::empty_file(),
+            Entry::Directory => INode::empty_directory()
+        };
+
+        // Write that `INode` to disk to get the index.
+        let inode_index = self.new_inode(&new_inode);
+
+        // Create a `DirEntry` with `name` for the new directory and link it
+        // to root.
+        let new_directory = DirEntry::new(new_entry.to_string(), inode_index);
+
+        self.write_dir_entry(new_directory, current_index).unwrap();
+
+        // Create the "." & ".." directories for a new directory.
+        if new_inode.is_directory {
+            let this = DirEntry::new(String::from("."), inode_index);
+            let parent = DirEntry::new(String::from(".."), prev_index);
+            self.write_dir_entry(this, inode_index).unwrap();
+            self.write_dir_entry(parent, inode_index).unwrap();
+            println!("Created new directory {name} at inode {inode_index:?}");
+        } else {
+            println!("Created new file {name} at inode {inode_index:?}");
+        }
+
+        return Ok(inode_index);
     }
 
     /// Writing a `DirEntry` needs to check if the `INode` already has a block
@@ -962,7 +956,7 @@ pub fn init() {
         .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
         .is_err()
     {
-        logln!("Not initializing the Filesystem again!");
+        logln!("[FS] Not initializing the Filesystem again!");
         return;
     }
 
