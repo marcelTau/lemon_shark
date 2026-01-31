@@ -38,6 +38,8 @@ pub enum Error {
     DirectoryDoesNotExist,
     NoSpaceForDirEntry,
     NotAFile,
+    NoSpaceInFile,
+    NotADirectory,
 }
 
 impl core::error::Error for Error {}
@@ -48,11 +50,11 @@ impl core::fmt::Display for Error {
     }
 }
 
-pub(crate) const BLOCK_SIZE: usize = 512;
+pub const BLOCK_SIZE: usize = 512;
 const INODE_BLOCKS: usize = 10;
 const INODE_START: usize = 1;
 const INODES_PER_BLOCK: usize = BLOCK_SIZE / core::mem::size_of::<INode>();
-const DIR_ENTRY_PER_BLOCK: usize = BLOCK_SIZE / core::mem::size_of::<DirEntry>();
+pub const DIR_ENTRY_PER_BLOCK: usize = BLOCK_SIZE / core::mem::size_of::<DirEntry>();
 const DATA_START: usize = INODE_START + INODE_BLOCKS + 1;
 const INODE_BITMAP_SIZE: usize = (INODE_BLOCKS * INODES_PER_BLOCK) / 32;
 const DATA_BITMAP_SIZE: usize = (ramdisk::total_blocks() - 1 /*superblock*/ - INODE_BLOCKS) / 32;
@@ -223,6 +225,7 @@ impl INode {
 pub struct DirEntry {
     /// Name of the directory
     name: [u8; 24],
+
     /// INode index of this directory
     inode: INodeIndex,
 }
@@ -275,7 +278,6 @@ impl DirEntry {
 #[repr(C)]
 #[derive(Debug, PartialEq)]
 pub struct SuperBlock {
-    // 32
     magic: u64,
     block_size: u32,
     total_blocks: u32,
@@ -404,6 +406,10 @@ impl LockedFilesystem {
             .unwrap()
             .read_file(inode_index)
     }
+
+    fn reset(&mut self) {
+        self.inner.get_mut().as_mut().unwrap().reset();
+    }
 }
 
 /// Terminology:
@@ -491,6 +497,13 @@ impl Filesystem {
         }
     }
 
+    pub fn reset(&mut self) {
+        *self = Filesystem::new();
+        ramdisk::reset();
+
+        self.create_empty_root();
+    }
+
     /// This handle the initialization of the Filesystem based on the passed
     /// `SuperBlock`.
     ///
@@ -529,8 +542,6 @@ impl Filesystem {
         // Finds the next free block in the `INodeBitmap`.
         let free = INodeIndex(self.inode_bitmap.find_free().unwrap());
 
-
-
         logln!("[FS] Writing INode to {free:?} in {:?}", self.inode_bitmap);
 
         // Set this block to be used.
@@ -555,6 +566,7 @@ impl Filesystem {
         // Iterate over all the nested directories skipping the first empty
         // entry.
         while let Some(entry) = peekable_iter.next() {
+            // Check if this is the last part of the path
             let is_last = peekable_iter.peek().is_none();
 
             let cmp = |bytes: &[u8]| -> bool {
@@ -563,13 +575,22 @@ impl Filesystem {
                 entry.as_bytes() == &bytes[offset..len]
             };
 
+            let dir_entries = self.read_dir_entry(current_index);
+
             if let Some(next_dir) = self
                 .read_dir_entry(current_index)
                 .iter()
                 .find(|e| cmp(&e.name[..]))
             {
+                // If this is the end of the path and we found a directory
+                // with the same name then it's duplicated.
                 if is_last {
                     return Err(Error::DuplicatedEntry);
+                }
+
+                // check that the inode that we found is actually a directory
+                if !self.inode_cache.get(next_dir.inode).is_directory {
+                    return Err(Error::NotADirectory);
                 }
 
                 prev_index = current_index;
@@ -735,6 +756,10 @@ impl Filesystem {
             return Err(Error::NotAFile);
         }
 
+        if inode.size as usize + bytes.len() > 16 * BLOCK_SIZE {
+            return Err(Error::NoSpaceInFile);
+        }
+
         let mut buf = [0u8; BLOCK_SIZE];
         let mut total_bytes = bytes.len();
         let mut bytes_written = 0;
@@ -753,7 +778,7 @@ impl Filesystem {
             let byte_offset = inode.size % BLOCK_SIZE as u32;
 
             let bytes_to_write = total_bytes.min(BLOCK_SIZE - byte_offset as usize);
-            println!("Writing {}/{} bytes", bytes_to_write, total_bytes);
+            logln!("[FS] Writing {}/{} bytes", bytes_to_write, total_bytes);
 
             let block_index = data_block_index.to_block_index();
 
@@ -907,19 +932,12 @@ pub mod api {
         (*FS.lock()).dump_dir(index);
     }
 
-    pub fn mkdir(name: String) {
-        match (*FS.lock()).mkdir(&name) {
-            Ok(_) => {
-                logln!("Successfully created directory: \"{name}\"");
-            }
-            Err(e) => {
-                println!("mkdir failed: {e:?}");
-            }
-        }
+    pub fn mkdir(name: &str) -> Result<INodeIndex, Error> {
+        (*FS.lock()).mkdir(name)
     }
 
-    pub fn create_file(name: String) -> Result<INodeIndex, Error> {
-        (*FS.lock()).create_file(&name)
+    pub fn create_file(name: &str) -> Result<INodeIndex, Error> {
+        (*FS.lock()).create_file(name)
     }
 
     pub fn write_to_file(inode_index: usize, text: String) -> Result<usize, Error> {
@@ -928,6 +946,10 @@ pub mod api {
 
     pub fn read_file(inode_index: usize) -> String {
         (*FS.lock()).read_file(INodeIndex(inode_index as u32))
+    }
+
+    pub fn reset() {
+        (*FS.lock()).reset();
     }
 }
 
@@ -950,17 +972,7 @@ pub fn init() {
     (*FS.lock()).init(filesystem);
     (*FS.lock()).create_empty_root();
 
-    // (FS.lock()).mkdir("/test-file.txt").unwrap();
-
-    // let mut s = String::new();
-
-    // for _ in 0..511 {
-    //     s.push('A');
-    // }
-
-    // (*FS.lock()).write_to_file(INodeIndex(1), s.as_bytes());
-
-    logln!("Initialized Filesystem");
+    logln!("[FS] Initialized");
 
     // dump();
 }

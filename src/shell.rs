@@ -214,7 +214,11 @@ impl ShellCommand {
             Self::Allocate { size } => shell_allocate(*size),
             ShellCommand::Timer { secs } => crate::timer::new_time(*secs),
             ShellCommand::Ls { dir } => crate::filesystem::api::dump_dir(*dir),
-            ShellCommand::Mkdir { name } => crate::filesystem::api::mkdir(name.clone()),
+            ShellCommand::Mkdir { name } => { 
+                if let Err(e) = crate::filesystem::api::mkdir(name) {
+                    println!("mkdir failed: {e:?}");
+                }
+            }
             ShellCommand::DumpFs => crate::filesystem::dump(),
             ShellCommand::Cat { inode_index } => {
                 let output = crate::filesystem::api::read_file(*inode_index);

@@ -46,3 +46,9 @@ pub(crate) fn write_block(block_idx: BlockIndex, data: &[u8]) {
         RAMDISK[start..start + BLOCK_SIZE].copy_from_slice(data);
     }
 }
+
+pub(crate) fn reset() {
+    unsafe {
+        RAMDISK = [0; RAMDISK_SIZE];
+    }
+}

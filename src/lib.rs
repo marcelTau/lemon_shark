@@ -81,7 +81,7 @@ where
 }
 
 /// Exit QEMU using SBI shutdown call
-fn exit_qemu(exit_code: u32) {
+pub fn exit_qemu(exit_code: u32) {
     use core::arch::asm;
 
     // https://lists.riscv.org/g/tech-brs/attachment/361/0/riscv-sbi.pdf
