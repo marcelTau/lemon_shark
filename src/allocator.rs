@@ -106,14 +106,15 @@ impl FreeListAllocator {
         unsafe {
             (*aligned_ptr.as_ptr()).size = heap_size - mem::size_of::<FreeBlock>();
             (*aligned_ptr.as_ptr()).next = None;
+
+            logln!(
+                "[ALLOC] Initialized allocator at {:#x} with size of {:#x} ({}KB)",
+                bounds.start,
+                (*aligned_ptr.as_ptr()).size,
+                (*aligned_ptr.as_ptr()).size / 1024
+            );
         }
 
-        logln!(
-            "[ALLOC] Initialized allocator at {:#x} with size of {:#x} ({}KB)",
-            bounds.start,
-            unsafe { (*aligned_ptr.as_ptr()).size },
-            unsafe { (*aligned_ptr.as_ptr()).size } / 1024,
-        );
 
         self.head = Some(aligned_ptr);
     }

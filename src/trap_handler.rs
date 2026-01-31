@@ -187,13 +187,36 @@ extern "C" fn trap_handler_rust() {
     }
 }
 
-/// Initializes the trap handler by writing the address of the `trap_handler` to the `stvec`
-/// register.
-pub fn init() {
+/// Setting up the trap stack using the `_trap_stack_top` label set by the 
+/// linker script to initialize a "known good" stack that the `trap_handler`
+/// can switch to when handling traps.
+fn setup_trap_stack() {
+    unsafe extern "C" {
+        static _trap_stack_top: u8;
+    }
+
+    unsafe {
+        let trap_stack = &_trap_stack_top as *const u8 as usize;
+        asm!("csrw sscratch, {}", in(reg) trap_stack);
+    }
+}
+
+/// Set the trap handler by writing the address of `trap_handler` to the
+/// `stvec` register with the lower 2 bits masked off. 
+fn setup_trap_handler() {
     let trap_handler_addr = (trap_handler as *const () as usize) & !0b11;
+
     unsafe {
         asm!("csrw stvec, {}", in(reg) trap_handler_addr);
     };
+}
 
-    logln!("Trap Handler initialized at {trap_handler_addr:#0x}");
+
+/// Initializes the trap handler by writing the address of the `trap_handler` to the `stvec`
+/// register.
+pub fn init() {
+    setup_trap_stack();
+    setup_trap_handler();
+
+    logln!("[Trap Handler] initialized");
 }

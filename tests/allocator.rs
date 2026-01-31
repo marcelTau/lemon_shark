@@ -23,17 +23,6 @@ global_asm!(
 /// it needs.
 #[unsafe(no_mangle)]
 pub extern "C" fn _start(_: usize, _: usize) -> ! {
-    unsafe extern "C" {
-        static _trap_stack_top: u8;
-        static _heap_top: u8;
-    }
-
-    // Set the `sscratch` register to a 'known good' stack that the `trap_handler` can use.
-    unsafe {
-        let trap_stack = &_trap_stack_top as *const u8 as usize;
-        asm!("csrw sscratch, {}", in(reg) trap_stack);
-    }
-
     trap_handler::init();
     interrupts::init();
 
