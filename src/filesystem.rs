@@ -87,7 +87,7 @@ mod types {
     impl INodeIndex {
         /// Returns the `BlockIndex` and the offset inside of the block for that
         /// `INode`.
-        pub(crate) fn to_block_index(&self) -> (BlockIndex, ByteOffset) {
+        pub(crate) fn to_block_index(self) -> (BlockIndex, ByteOffset) {
             let block_index = BlockIndex(INODE_START as u32 + (self.0 / INODES_PER_BLOCK as u32));
             let offset =
                 ByteOffset((self.0 % INODES_PER_BLOCK as u32) * mem::size_of::<INode>() as u32);
@@ -203,7 +203,7 @@ impl INode {
         }
     }
 
-    fn to_bytes(&self) -> [u8; mem::size_of::<INode>()] {
+    fn to_bytes(self) -> [u8; mem::size_of::<INode>()] {
         let mut bytes = [0u8; mem::size_of::<INode>()];
 
         bytes[0..4].copy_from_slice(&self.size.to_le_bytes());
@@ -381,11 +381,19 @@ impl LockedFilesystem {
     }
 
     pub fn mkdir(&mut self, path: &str) -> Result<INodeIndex, Error> {
-        self.inner.get_mut().as_mut().unwrap().new_dir_entry(path, Entry::Directory)
+        self.inner
+            .get_mut()
+            .as_mut()
+            .unwrap()
+            .new_dir_entry(path, Entry::Directory)
     }
 
     pub fn create_file(&mut self, path: &str) -> Result<INodeIndex, Error> {
-        self.inner.get_mut().as_mut().unwrap().new_dir_entry(path, Entry::File)
+        self.inner
+            .get_mut()
+            .as_mut()
+            .unwrap()
+            .new_dir_entry(path, Entry::File)
     }
 
     fn dump_dir(&mut self, index: u32) {
@@ -420,10 +428,10 @@ impl LockedFilesystem {
 /// Terminology:
 /// * INode      - is a block of metadata about a file - written to INode blocks
 /// * DirEntry   - contains a name and the associated INode ID - is written to
-///                Data block
+///   Data block
 /// * RawData    - contains raw file content - written to Data block
 /// * Superblock - the first block in the filesystem containing metadata
-///                about the state of the filesystem
+///   about the state of the filesystem
 pub struct Filesystem {
     inode_bitmap: Bitmap<INODE_BITMAP_SIZE>,
     data_bitmap: Bitmap<DATA_BITMAP_SIZE>,
@@ -561,7 +569,6 @@ impl Filesystem {
         free
     }
 
-
     fn byte_compare(s: &str, bytes: &[u8; 24]) -> bool {
         let len = bytes.iter().take_while(|&&b| b != 0).count();
         let offset = if bytes[0] == b'/' { 1 } else { 0 };
@@ -574,7 +581,7 @@ impl Filesystem {
         let mut prev_index = INodeIndex(0);
 
         let mut path: Vec<_> = name.split('/').skip(1).collect();
-        
+
         // The new entry - last part of the path.
         let new_entry = path.pop().unwrap();
 
@@ -584,7 +591,7 @@ impl Filesystem {
             let dir_entries = self.read_dir_entry(current_index);
             let next = dir_entries
                 .iter()
-                .find(|e| Self::byte_compare(dir, &e.name)) 
+                .find(|e| Self::byte_compare(dir, &e.name))
                 .ok_or(Error::DirectoryDoesNotExist)?;
 
             prev_index = current_index;
@@ -592,17 +599,18 @@ impl Filesystem {
         }
 
         // Check that there is no entry with the same name.
-        if self.read_dir_entry(current_index)
+        if self
+            .read_dir_entry(current_index)
             .iter()
-            .any(|e| Self::byte_compare(&new_entry, &e.name))
+            .any(|e| Self::byte_compare(new_entry, &e.name))
         {
             return Err(Error::DuplicatedEntry);
         }
-        
+
         // Create new `INode`.
         let new_inode = match entry_type {
             Entry::File => INode::empty_file(),
-            Entry::Directory => INode::empty_directory()
+            Entry::Directory => INode::empty_directory(),
         };
 
         // Write that `INode` to disk to get the index.
@@ -625,7 +633,7 @@ impl Filesystem {
             println!("Created new file {name} at inode {inode_index:?}");
         }
 
-        return Ok(inode_index);
+        Ok(inode_index)
     }
 
     /// Writing a `DirEntry` needs to check if the `INode` already has a block
@@ -810,7 +818,7 @@ impl Filesystem {
             let valid_bytes = total_bytes.min(BLOCK_SIZE);
             total_bytes -= valid_bytes;
 
-            string.push_str(&String::from_utf8(buf[..valid_bytes].to_vec()).unwrap());
+            string.push_str(str::from_utf8(&buf[..valid_bytes]).unwrap());
         }
 
         string

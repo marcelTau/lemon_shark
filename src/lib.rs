@@ -1,3 +1,5 @@
+#![allow(clippy::missing_safety_doc)]
+#![allow(clippy::new_without_default)]
 #![no_std]
 #![cfg_attr(test, no_main)]
 #![feature(custom_test_frameworks)]

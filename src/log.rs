@@ -30,7 +30,6 @@ pub fn _print(args: ::core::fmt::Arguments) {
     return;
     use core::fmt::Write;
 
-
     if UartWriter.write_fmt(args).is_err() {
         // Fallback: write error message directly
         unsafe {

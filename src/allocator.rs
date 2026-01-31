@@ -11,6 +11,7 @@ pub fn align_up(addr: usize, align: usize) -> usize {
     (addr + align - 1) & !(align - 1)
 }
 
+#[derive(Default)]
 pub struct LockedAllocator {
     inner: UnsafeCell<FreeListAllocator>,
 }
@@ -92,6 +93,7 @@ impl<T> AlignedPtr<T> {
     }
 }
 
+#[derive(Default)]
 pub struct FreeListAllocator {
     pub head: Option<AlignedPtr<FreeBlock>>,
 }
@@ -114,7 +116,6 @@ impl FreeListAllocator {
                 (*aligned_ptr.as_ptr()).size / 1024
             );
         }
-
 
         self.head = Some(aligned_ptr);
     }
