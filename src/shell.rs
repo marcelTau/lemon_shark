@@ -75,15 +75,20 @@ fn sysinfo() {
 
 fn help() {
     println!("Available commands:");
-    println!("  help            -- show this help menu");
-    println!("  exit            -- shutdown the OS");
-    println!("  memory          -- show the current state of the global kernel allocator");
-    println!("  timer <n>       -- set a timer for N seconds which will cause an interrupt");
-    println!("  sysinfo         -- print system information");
-    println!("  uptime          -- show for how long the system is running");
-    println!("  allocate <n>    -- allocate memory of size n to test the kernel allocator");
-    println!("  mkdir <name>    -- create a new directory in root");
-    println!("  ls              -- show directories");
+    println!("  help                -- show this help menu");
+    println!("  exit                -- shutdown the OS");
+    println!("  sysinfo             -- print system information");
+    println!("  memory              -- show the current state of the global kernel allocator");
+    println!("  timer <n>           -- set a timer for N seconds which will cause an interrupt");
+    println!("  ls                  -- show directories");
+    println!("  mkdir <name>        -- creates a new directory");
+    println!("  touch <name>        -- creates a new file");
+    println!("  dumpfs              -- dump of the filesystem");
+    println!("  cat <file>          -- print content of file to the console");
+    println!("  uptime              -- show for how long the system is running");
+    println!("  write <file> <text> -- write text to the file");
+    println!("  tree                -- show a tree view of the filesystem");
+    println!("  allocate <n>        -- allocate memory of size n to test the kernel allocator");
 }
 
 fn shell_allocate(size: usize) {
@@ -132,6 +137,8 @@ enum ShellCommand {
     DumpFs,
     Write { inode_index: usize, text: String },
     Cat { inode_index: usize },
+    Touch { name: String },
+    Tree,
 }
 
 impl ShellCommand {
@@ -151,6 +158,7 @@ impl ShellCommand {
             "memory" => ShellCommand::MemoryDump,
             "uptime" => ShellCommand::Uptime,
             "sysinfo" => ShellCommand::SysInfo,
+            "tree" => ShellCommand::Tree,
             "bench" => {
                 let n = parts.get(1).and_then(|n| n.parse().ok())?;
                 let size = parts.get(2).and_then(|n| n.parse().ok())?;
@@ -176,6 +184,10 @@ impl ShellCommand {
                 }
 
                 ShellCommand::Mkdir { name }
+            }
+            "touch" => {
+                let name = String::from_str(parts.get(1).unwrap()).unwrap();
+                ShellCommand::Touch { name }
             }
             "ls" => {
                 let dir = parts
@@ -219,6 +231,11 @@ impl ShellCommand {
                     println!("mkdir failed: {e:?}");
                 }
             }
+            ShellCommand::Touch { name } => {
+                if let Err(e) = crate::filesystem::api::create_file(name) {
+                    println!("touch failed: {e:?}");
+                }
+            }
             ShellCommand::DumpFs => crate::filesystem::dump(),
             ShellCommand::Cat { inode_index } => {
                 let output = crate::filesystem::api::read_file(*inode_index);
@@ -229,7 +246,12 @@ impl ShellCommand {
                 println!("Currently running for {time}s");
             }
             ShellCommand::Write { inode_index, text } => {
-                crate::filesystem::api::write_to_file(*inode_index, text.clone()).unwrap();
+                if let Err(e) = crate::filesystem::api::write_to_file(*inode_index, text.clone()) {
+                    println!("Writing to file failed: {e}");
+                }
+            }
+            ShellCommand::Tree => {
+                crate::filesystem::api::tree();
             }
         }
     }

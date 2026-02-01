@@ -423,6 +423,10 @@ impl LockedFilesystem {
     fn reset(&mut self) {
         self.inner.get_mut().as_mut().unwrap().reset();
     }
+
+    fn tree(&mut self) {
+        self.inner.get_mut().as_mut().unwrap().tree();
+    }
 }
 
 /// Terminology:
@@ -438,16 +442,20 @@ pub struct Filesystem {
     inode_cache: INodeCache,
 }
 
+#[derive(Default)]
 struct INodeCache {
     /// A `vec` holding all used `INodes` mapped by their `INodeIndex`. If an
     /// `INode` has not been read yet, the value in it's spot is `None`.
     inodes: Vec<Option<INode>>,
-    // TODO(mt): store dirty nodes to know what to flush periodically.
+    dirty: Bitmap<INODE_BITMAP_SIZE>,
 }
 
 impl INodeCache {
     pub const fn new() -> Self {
-        Self { inodes: Vec::new() }
+        Self { 
+            inodes: Vec::new(),
+            dirty: Bitmap::<INODE_BITMAP_SIZE>::new()
+        }
     }
 
     /// Reads the `INode` from disk if it's not already in the cache.
@@ -456,6 +464,27 @@ impl INodeCache {
         let (block_index, byte_offset) = index.to_block_index();
         ramdisk::read_block(block_index, &mut buf);
         INode::from_bytes(&buf[byte_offset.range::<INode>()])
+    }
+
+    /// Writes an `INode` to `ramdisk`.
+    fn write_inode_to_disk(&self, inode_index: INodeIndex, inode: &INode) {
+        // Creating the buffer to write the INode to.
+        let mut buf = [0u8; BLOCK_SIZE];
+
+        // Calculate the `BlockIndex` and the `ByteOffset` for the `INode`
+        // to be written to.
+        let (block_index, byte_offset) = inode_index.to_block_index();
+
+        // Reading the block into `buf` to append the `INode` to it.
+        ramdisk::read_block(block_index, &mut buf);
+
+        // Calculating the byte_offset inside of the block.
+        logln!("[FS] Writing to block index {block_index:?} at byte_offset={byte_offset:?}");
+
+        buf[byte_offset.range::<INode>()].copy_from_slice(inode.to_bytes().as_slice());
+
+        // Writing the block to memory.
+        ramdisk::write_block(block_index, &buf);
     }
 
     /// Get a `&INode` from the cache, fetching it from disk when not present.
@@ -484,6 +513,9 @@ impl INodeCache {
             self.inodes[index.0 as usize] = Some(Self::read_from_disk(index));
         }
 
+        // When handing out a mutable reference, consider it dirty.
+        self.dirty.set(index.0);
+
         self.inodes
             .get_mut(index.0 as usize)
             .unwrap()
@@ -498,6 +530,13 @@ impl INodeCache {
         }
 
         self.inodes[index.0 as usize] = Some(inode);
+    }
+
+    pub fn flush(&mut self) {
+        for idx in self.dirty.iter_set() {
+            let inode = self.inodes[idx as usize].unwrap();
+            self.write_inode_to_disk(INodeIndex(idx), &inode);
+        }
     }
 }
 
@@ -864,6 +903,39 @@ impl Filesystem {
             }
         }
     }
+
+    fn tree(&mut self) {
+        fn inner(fs: &mut Filesystem, entry: &DirEntry, indent: u8) {
+            let entries = fs.read_dir_entry(entry.inode);
+
+            if !entries.iter().any(|e| fs.inode_cache.get(e.inode).is_directory) {
+                return;
+            }
+
+            let inode = fs.inode_cache.get(entry.inode);
+
+            if inode.is_directory {
+                println!("{}{}", " ".repeat(indent as usize), entry.name());
+            }
+
+            for entry in entries.iter().filter(|e| !e.name().starts_with('.')) {
+                inner(fs, &entry, indent + 2);
+                if !fs.inode_cache.get(entry.inode).is_directory {
+                    println!("{}{}", " ".repeat(indent as usize + 2), entry.name());
+                }
+            }
+
+
+        }
+
+        let root_entries = self.read_dir_entry(INodeIndex(0));
+
+        println!("root_entries={root_entries:?}");
+
+        for root_entry in root_entries.iter().filter(|e| !e.name().starts_with('.')) {
+            inner(self, &root_entry, 0);
+        }
+    }
 }
 
 /// Memmory dump of all the blocks. Handy for debugging.
@@ -953,6 +1025,10 @@ pub mod api {
     pub fn reset() {
         (*FS.lock()).reset();
     }
+
+    pub fn tree() {
+        (*FS.lock()).tree();
+    }
 }
 
 /// Initializes the Filesystem by reading the superblock or defaulting it
@@ -974,7 +1050,18 @@ pub fn init() {
     (*FS.lock()).init(filesystem);
     (*FS.lock()).create_empty_root();
 
+    api::mkdir("/foo").unwrap();
+    api::mkdir("/foo/test").unwrap();
+    api::create_file("/foo/file.txt").unwrap();
+    api::mkdir("/foo/test/deep").unwrap();
+    api::mkdir("/foo/test/deep/deep2").unwrap();
+    api::create_file("/foo/test/deep/deep2/xxfile.txt").unwrap();
+    api::create_file("/foo/test/deep/deep-file.txt").unwrap();
+    api::create_file("/foo/test1.txt").unwrap();
+    api::create_file("/foo/test2.txt").unwrap();
+    api::create_file("/foo/test3.txt").unwrap();
+
     logln!("[FS] Initialized");
 
-    // dump();
+    // (*FS.lock()).tree();
 }
