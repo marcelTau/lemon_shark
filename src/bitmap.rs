@@ -1,9 +1,9 @@
-use crate::{bytereader::ByteReader, logln};
+use crate::{bytereader::ByteReader, logln, println};
 extern crate alloc;
 use alloc::vec::Vec;
 use core::mem;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Default)]
 pub struct Bitmap {
     len: u32,
     arr: Vec<u32>,
@@ -22,6 +22,7 @@ impl Bitmap {
         let mut reader = ByteReader::new(bytes);
         let len = reader.read_u32();
 
+        println!("Allocating {} * 8", len);
         let mut arr = Vec::with_capacity(len as usize);
 
         for chunk in bytes.chunks(4).skip(1) {
@@ -79,26 +80,45 @@ impl Bitmap {
 
         None
     }
-
-    pub fn iter_set(&self) -> impl Iterator<Item = u32> {
+    /// Returns an iterator over all set bits and unsets them.
+    pub fn fdrain_set(&self) -> impl Iterator<Item = u32> {
         self.arr
             .iter()
             .copied()
             .enumerate()
             .flat_map(|(idx, mut n)| {
                 core::iter::from_fn(move || {
-                    let trailing = n.trailing_zeros();
-
-                    if trailing == 0 {
+                    if n == 0 {
                         return None;
                     }
 
-                    n &= !(1 << trailing);
+                    let trailing = n.trailing_zeros();
+
+                    n &= !(1u32 << trailing);
 
                     let index = idx * 32 + trailing as usize;
 
                     Some(index as u32)
                 })
             })
+    }
+
+    /// Returns an iterator over all set bits and unsets them.
+    pub fn drain_set(&mut self) -> impl Iterator<Item = u32> {
+        self.arr.iter_mut().enumerate().flat_map(|(idx, n)| {
+            core::iter::from_fn(move || {
+                if *n == 0 {
+                    return None;
+                }
+
+                let trailing = n.trailing_zeros();
+
+                *n &= !(1u32 << trailing);
+
+                let index = idx * 32 + trailing as usize;
+
+                Some(index as u32)
+            })
+        })
     }
 }

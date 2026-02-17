@@ -1,4 +1,4 @@
-use crate::filesystem::{BLOCK_SIZE, BlockIndex};
+use crate::filesystem::{BlockIndex, BLOCK_SIZE};
 
 pub(crate) const RAMDISK_SIZE: usize = 1024 * 1024;
 
@@ -8,13 +8,13 @@ pub(crate) const fn total_blocks() -> usize {
     RAMDISK_SIZE / BLOCK_SIZE
 }
 
-/// Read block `block_num` into `buf`.
-pub(crate) fn read_block(block_idx: BlockIndex, buf: &mut [u8]) {
+/// Read block `idx` into `buf`.
+pub(crate) fn read_block(idx: BlockIndex, buf: &mut [u8]) {
     if buf.len() != BLOCK_SIZE {
         panic!("Buffer must be BLOCK_SIZE bytes");
     }
 
-    let start = block_idx.0 as usize * BLOCK_SIZE;
+    let start = idx.0 as usize * BLOCK_SIZE;
 
     if start + BLOCK_SIZE > RAMDISK_SIZE {
         panic!(
@@ -28,12 +28,13 @@ pub(crate) fn read_block(block_idx: BlockIndex, buf: &mut [u8]) {
     }
 }
 
-pub(crate) fn write_block(block_idx: BlockIndex, data: &[u8]) {
+/// Write `data` into block `idx`.
+pub(crate) fn write_block(idx: BlockIndex, data: &[u8]) {
     if data.len() != BLOCK_SIZE {
         panic!("Data must be BLOCK_SIZE bytes");
     }
 
-    let start = block_idx.0 as usize * BLOCK_SIZE;
+    let start = idx.0 as usize * BLOCK_SIZE;
 
     if start + BLOCK_SIZE > RAMDISK_SIZE {
         panic!(
