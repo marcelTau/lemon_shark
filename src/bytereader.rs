@@ -26,4 +26,8 @@ impl<'a> ByteReader<'a> {
         self.pos += len;
         slice
     }
+
+    pub(crate) fn rest(self) -> &'a [u8] {
+        &self.bytes[self.pos..]
+    }
 }
