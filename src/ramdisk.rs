@@ -14,7 +14,7 @@ pub(crate) fn read_block(idx: BlockIndex, buf: &mut [u8]) {
         panic!("Buffer must be BLOCK_SIZE bytes");
     }
 
-    let start = idx.0 as usize * BLOCK_SIZE;
+    let start = idx.inner() as usize * BLOCK_SIZE;
 
     if start + BLOCK_SIZE > RAMDISK_SIZE {
         panic!(
@@ -34,7 +34,7 @@ pub(crate) fn write_block(idx: BlockIndex, data: &[u8]) {
         panic!("Data must be BLOCK_SIZE bytes");
     }
 
-    let start = idx.0 as usize * BLOCK_SIZE;
+    let start = idx.inner() as usize * BLOCK_SIZE;
 
     if start + BLOCK_SIZE > RAMDISK_SIZE {
         panic!(

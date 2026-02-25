@@ -349,65 +349,6 @@ impl core::fmt::Display for Error {
     }
 }
 
-// mod types {
-//     use core::mem;
-//     use core::num::NonZeroU32;
-//
-//     use super::{INode, INODES_PER_BLOCK};
-//
-//     /// An Index into the blocks used for the `ramdisk`.
-//     #[derive(Debug, Clone, Copy)]
-//     pub(crate) struct BlockIndex(pub u32);
-//
-//     /// A `ByteOffset` to something inside of a block.
-//     #[derive(Debug)]
-//     pub(crate) struct ByteOffset(pub u32);
-//
-//     impl ByteOffset {
-//         pub(crate) fn range<T>(&self) -> core::ops::Range<usize> {
-//             self.0 as usize..self.0 as usize + mem::size_of::<T>()
-//         }
-//     }
-//
-//     /// This is the actual index of the INode.
-//     #[derive(Debug, Copy, Clone)]
-//     pub struct INodeIndex(pub u32);
-//
-//     // impl INodeIndex {
-//     //     /// Returns the `BlockIndex` and the offset inside of the block for that
-//     //     /// `INode`.
-//     //     pub(crate) fn to_block_index(self) -> (BlockIndex, ByteOffset) {
-//     //         let block_index = BlockIndex(INODE_START as u32 + (self.0 / INODES_PER_BLOCK as u32));
-//     //         let offset =
-//     //             ByteOffset((self.0 % INODES_PER_BLOCK as u32) * mem::size_of::<INode>() as u32);
-//     //         (block_index, offset)
-//     //     }
-//     // }
-//
-//     /// `DataBlockIndex` is an index into the blocks of the ramdisk but is restricted to
-//     /// indexes into the data segment. This is used to enforce this invariant in the
-//     /// typesystem.
-//     #[derive(Clone, Copy, Debug, Default)]
-//     #[repr(transparent)]
-//     pub(crate) struct DataBlockIndex(Option<NonZeroU32>);
-//     impl DataBlockIndex {
-//         /// Creates a new `DataBlockIndex` from an index into the data segment.
-//         pub(crate) fn new(base: u32, val: u32) -> Self {
-//             Self(NonZeroU32::new(base + val))
-//         }
-//
-//         pub(crate) fn value(&self) -> Option<u32> {
-//             self.0.map(|v| v.get())
-//         }
-//
-//         pub(crate) fn is_none(&self) -> bool {
-//             self.0.is_none()
-//         }
-//     }
-// }
-
-// use types::{ByteOffset, DataBlockIndex, INodeIndex};
-
 /// The `INode` contains metadata about a file.
 ///
 /// Memory layout:

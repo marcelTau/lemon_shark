@@ -88,6 +88,7 @@ fn help() {
     println!("  uptime              -- show for how long the system is running");
     println!("  write <file> <text> -- write text to the file");
     println!("  tree                -- show a tree view of the filesystem");
+    println!("  flush               -- flush filesystem metadata to disk");
     println!("  allocate <n>        -- allocate memory of size n to test the kernel allocator");
 }
 
@@ -139,6 +140,7 @@ enum ShellCommand {
     Cat { inode_index: usize },
     Touch { name: String },
     Tree,
+    Flush,
 }
 
 impl ShellCommand {
@@ -197,6 +199,7 @@ impl ShellCommand {
                 ShellCommand::Ls { dir }
             }
             "dumpfs" => ShellCommand::DumpFs,
+            "flush" => ShellCommand::Flush,
             "write" => {
                 let (inode_index, rest) = parts.split_at(2);
 
@@ -236,7 +239,9 @@ impl ShellCommand {
                     println!("touch failed: {e:?}");
                 }
             }
-            ShellCommand::DumpFs => crate::filesystem::dump(),
+            ShellCommand::DumpFs => {
+                crate::filesystem::api::dump();
+            }
             ShellCommand::Cat { inode_index } => {
                 let output = crate::filesystem::api::read_file(*inode_index);
                 println!("{output}");
@@ -252,6 +257,9 @@ impl ShellCommand {
             }
             ShellCommand::Tree => {
                 crate::filesystem::api::tree();
+            }
+            ShellCommand::Flush => {
+                crate::filesystem::api::flush();
             }
         }
     }

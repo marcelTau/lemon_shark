@@ -92,18 +92,18 @@ For example:
 
 Allocator starts with:
 ```
-+------------------------------
-|md |  ...                    |
-+------------------------------
++------------------------------+
+| md |  ...                    |
++------------------------------+
 
 A single block with some metadata at the beginning. 
 Let's say size = 1024 & next = null.
 
 User allocates 80 bytes.
 
-+------------------------------
++-----------------------------+
 | user | md |  ...            |
-+------------------------------
++-----------------------------+
 
 Now the first 80 bytes are allocated memory for the user and a pointer was
 returned to the start of this memory.

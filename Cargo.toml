@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 fdt = { version = "0.1.5", features = ["pretty-printing"] }
 spin = "0.10.0"
+virtio-drivers = "0.12.0"
 
 [[bin]]
 name = "lemon_shark"

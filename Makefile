@@ -14,6 +14,9 @@ all: run
 debug: ARGS += -s -S
 debug: run
 
+reset_disk:
+	rm disk.img && truncate -s 16M disk.img	
+
 run:
 	@cargo build
 	@echo "Running: $(QEMU) $(ARGS)"

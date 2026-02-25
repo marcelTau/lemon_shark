@@ -272,7 +272,9 @@ impl FreeListAllocator {
             })
         };
 
-        result.expect("Out of memory").as_ptr()
+        result
+            .unwrap_or_else(|| panic!("Out of memory, requested {}kb", size / 1024))
+            .as_ptr()
     }
 
     pub fn dealloc(&mut self, ptr: *mut u8, _layout: Layout) {
@@ -335,7 +337,11 @@ impl FreeListAllocator {
             let merge_left = (prev.as_addr()) + (*prev.as_ptr()).size == start_addr;
             let merge_right = next.is_some_and(|next| start_addr + size == next.as_addr());
 
-            logln!("merge_left: {}, merge_right: {}", merge_left, merge_right);
+            logln!(
+                "[ALLOC] merge_left: {}, merge_right: {}",
+                merge_left,
+                merge_right
+            );
 
             match (merge_left, merge_right) {
                 (true, true) => {

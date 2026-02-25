@@ -4,6 +4,8 @@ use core::{cell::UnsafeCell, str::FromStr};
 extern crate alloc;
 use alloc::string::String;
 
+use crate::println;
+
 /// The Device Tree Header sturcture is used to get the size of the actual
 /// device tree to be able to pass it to the `fdt` crate which parses it.
 ///
@@ -24,6 +26,30 @@ pub struct FdtHeader {
     size_dt_strings: u32,
     size_dt_struct: u32,
 }
+
+/*
+ memory@80000000 {
+        device_type = "memory"
+        reg = <0x80000000 0x8000000>
+    };
+
+ reserved-memory {
+        #address-cells = <0x2>
+        #size-cells = <0x2>
+        ranges = []
+
+        mmode_resv1@80000000 {
+            reg = <0x80000000 0x40000>
+            no-map = []
+        };
+
+        mmode_resv0@80040000 {
+            reg = <0x80040000 0x20000>
+            no-map = []
+        };
+    };
+
+*/
 
 impl FdtHeader {
     /// SAFETY: `ptr` must be valid and pointing to start of the device tree.
@@ -103,6 +129,37 @@ impl SystemInfo {
                 total_memory += size;
             }
         }
+
+
+        // TODO(mt): read the values out of the device tree and make the virtio
+        // driver use them instead of hardcoding.
+        //
+        // for node in fdt.find_all_nodes("/soc/virtio_mmio") {
+        //     println!("{}", node.name);
+        // }
+
+        // for node in fdt.all_nodes() {
+        // // Check if it's a VirtIO MMIO device
+        // if let Some(compatible) = node.compatible() {
+        //     if compatible.all().any(|s| s == "virtio,mmio") {
+        //         // Get its MMIO address
+        //         if let Some(mut reg) = node.reg() {
+        //             if let Some(region) = reg.next() {
+        //                 let addr = region.starting_address as usize;
+        //                 println!("Found virtio,mmio at 0x{:x}\n", addr);
+
+        //                 // Probe to see if it's a block device
+        //                 unsafe {
+        //                     let device_id = core::ptr::read_volatile((addr + 0x008) as *const u32);
+        //                     if device_id == 2 {
+        //                         println!("  -> Block device!\n");
+        //                     }
+        //                 }
+        //             }
+        //         }
+        //     }
+        // }
+        // }
 
         let isa = cpu.properties().find(|p| p.name.starts_with("riscv,isa"));
         let value = isa.unwrap().value;

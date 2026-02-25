@@ -1,3 +1,4 @@
+#![allow(clippy::doc_lazy_continuation)]
 #![allow(clippy::missing_safety_doc)]
 #![allow(clippy::new_without_default)]
 #![no_std]
@@ -18,6 +19,8 @@ pub mod ramdisk;
 pub mod shell;
 pub mod timer;
 pub mod trap_handler;
+pub mod virtio;
+pub mod virtio2;
 
 use crate::allocator::LockedAllocator;
 
