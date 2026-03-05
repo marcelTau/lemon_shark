@@ -8,8 +8,6 @@
 #![reexport_test_harness_main = "test_main"]
 
 pub mod allocator;
-pub mod bitmap;
-pub mod bytereader;
 pub mod device_tree;
 pub mod filesystem;
 pub mod interrupts;

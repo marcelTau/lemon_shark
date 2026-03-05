@@ -1,10 +1,10 @@
 use virtio_drivers::device::blk::VirtIOBlk;
-use virtio_drivers::transport::mmio::{MmioTransport, VirtIOHeader};
 use virtio_drivers::transport::Transport;
-use virtio_drivers::{BufferDirection, Hal, PhysAddr, PAGE_SIZE};
+use virtio_drivers::transport::mmio::{MmioTransport, VirtIOHeader};
+use virtio_drivers::{BufferDirection, Hal, PAGE_SIZE, PhysAddr};
 
 extern crate alloc;
-use alloc::alloc::{alloc_zeroed, dealloc, Layout};
+use alloc::alloc::{Layout, alloc_zeroed, dealloc};
 
 use crate::filesystem::BlockIndex;
 use crate::println;
@@ -17,7 +17,6 @@ pub struct LockedBlockDevice<'a> {
 impl LockedBlockDevice<'_> {
     fn new() -> Self {
         let header = NonNull::new(0x10008000 as *mut VirtIOHeader).unwrap();
-        // let transport = unsafe { MmioTransport::new(header, 0x1000) }.unwrap();
 
         let transport = match unsafe { MmioTransport::new(header, 0x1000) } {
             Err(e) => panic!("Error creating VirtIO MMIO transport: {}", e),

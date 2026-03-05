@@ -4,7 +4,7 @@
 //! Device - The virtual hardware (i.e the virtio block device)
 //! Driver - The kernel code that controls the Device
 //! Guest  - This kernel running in QEMU
-//! Host   - The device inside of QEMU 
+//! Host   - The device inside of QEMU
 
 #![allow(unused)]
 
@@ -16,7 +16,6 @@ use crate::{logln, println};
 //     reg = <0x10008000 0x1000>
 //     compatible = "virtio,mmio"
 // };
-
 
 /// Choosen Queue size has to be power of 2 and <= QUEUE_MAX_SIZE;
 const QUEUE_SIZE: usize = 64;
@@ -48,15 +47,13 @@ mod mmiodevice_legacy_register_layout {
     pub(crate) const INTERRUPT_STATUS: usize = 0x060;
     pub(crate) const INTERRUPT_ACK: usize = 0x064;
     pub(crate) const STATUS: usize = 0x070;
-    pub(crate) const CONFIG: usize = 0x100;  // Device-specific config starts here
+    pub(crate) const CONFIG: usize = 0x100; // Device-specific config starts here
 }
 
 use mmiodevice_legacy_register_layout::*;
 
 fn read_volatile(offset: usize) -> u32 {
-    unsafe {
-        core::ptr::read_volatile((BASE + offset) as *const u32)
-    }
+    unsafe { core::ptr::read_volatile((BASE + offset) as *const u32) }
 }
 
 fn write_volatile(offset: usize, value: u32) {
@@ -72,7 +69,9 @@ fn read_config() {
     }
 }
 
-const fn align_up(x: usize, a: usize) -> usize { (x + a - 1) & !(a - 1) }
+const fn align_up(x: usize, a: usize) -> usize {
+    (x + a - 1) & !(a - 1)
+}
 
 /// The total number of bytes used for the `VirtQ`. Following section 2.6.2.
 ///
@@ -88,7 +87,7 @@ const fn align_up(x: usize, a: usize) -> usize { (x + a - 1) & !(a - 1) }
 /// This has to be allocated in contiguous memory.
 const QUEUE_BYTES: usize = {
     let descriptor = 16 * QUEUE_SIZE;
-    let available = 6  + 2 * QUEUE_SIZE;
+    let available = 6 + 2 * QUEUE_SIZE;
     let used = 6 + 8 * QUEUE_SIZE;
 
     let used_offset = align_up(descriptor + available, QUEUE_ALIGN_BYTES);
@@ -96,9 +95,13 @@ const QUEUE_BYTES: usize = {
 };
 
 #[repr(align(4096))]
-struct QBuf { data: [u8; QUEUE_BYTES] }
+struct QBuf {
+    data: [u8; QUEUE_BYTES],
+}
 
-static mut VIRTQ: QBuf = QBuf { data: [0u8; QUEUE_BYTES] };
+static mut VIRTQ: QBuf = QBuf {
+    data: [0u8; QUEUE_BYTES],
+};
 
 /// Device initialization sequence: Section 3.1
 /// Device status fields: Section 2.1
@@ -147,7 +150,6 @@ fn initialize_driver() -> bool {
 /// 7. Write the physical number of the first page of the queue to the QueuePFN
 /// register.
 fn setup_virtqueue() {
-
     // 1. Select queue 0
     write_volatile(QUEUE_SEL, 0);
 
@@ -173,7 +175,7 @@ fn setup_virtqueue() {
 
     // 4. Zero out the static memory.
 
-    let base = unsafe { core::ptr::addr_of_mut!(VIRTQ.data) as usize};
+    let base = unsafe { core::ptr::addr_of_mut!(VIRTQ.data) as usize };
 
     // 5. Write `QUEUE_SIZE` to `QUEUE_NUM`
     write_volatile(QUEUE_NUM, QUEUE_SIZE as u32);
@@ -183,7 +185,6 @@ fn setup_virtqueue() {
 
     // 7. Write physical page number to `QUEUE_PFN`
     write_volatile(QUEUE_PFN, (base / QUEUE_ALIGN_BYTES) as u32);
-       
 }
 
 // We need to use this: 2.6 Split Virtqueues (legacy interface)
@@ -243,7 +244,10 @@ pub fn init() {
 
     let capacity = read_capacity();
 
-    println!("[VIRTIO] Found disk with Capacity: {}MB", capacity * 512 / 1024 / 1024);
+    println!(
+        "[VIRTIO] Found disk with Capacity: {}MB",
+        capacity * 512 / 1024 / 1024
+    );
 
     let max_queue_size = read_volatile(QUEUE_NUM_MAX);
     println!("[VIRTIO] Max queue size: {}", max_queue_size);
@@ -256,11 +260,9 @@ pub fn init() {
 
     setup_virtqueue();
 
-
     let status = read_volatile(STATUS);
-    
-    write_volatile(STATUS, status | 0x4);
 
+    write_volatile(STATUS, status | 0x4);
 
     let interrupt_status = read_volatile(INTERRUPT_STATUS);
 
@@ -268,4 +270,3 @@ pub fn init() {
 
     println!("[VIRTIO] initialized");
 }
-

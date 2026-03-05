@@ -4,8 +4,6 @@ use core::{cell::UnsafeCell, str::FromStr};
 extern crate alloc;
 use alloc::string::String;
 
-use crate::println;
-
 /// The Device Tree Header sturcture is used to get the size of the actual
 /// device tree to be able to pass it to the `fdt` crate which parses it.
 ///
@@ -130,7 +128,6 @@ impl SystemInfo {
             }
         }
 
-
         // TODO(mt): read the values out of the device tree and make the virtio
         // driver use them instead of hardcoding.
         //
@@ -194,4 +191,25 @@ pub fn total_memory() -> usize {
 
 pub fn cpu_isa() -> String {
     SYSINFO.lock().inner().cpu_isa.clone()
+}
+
+pub fn virtio_mmio_devices(fdt_addr: usize) -> alloc::vec::Vec<usize> {
+    let ptr = fdt_addr as *const u8;
+    let size = unsafe { FdtHeader::from_ptr(ptr) }.totalsize as usize;
+    let slice = unsafe { core::slice::from_raw_parts(ptr, size) };
+    let fdt = fdt::Fdt::new(slice).expect("Could not read device tree");
+
+    let mut devices = alloc::vec::Vec::new();
+    for node in fdt.all_nodes() {
+        if let Some(compatible) = node.compatible() {
+            if compatible.all().any(|s| s == "virtio,mmio") {
+                if let Some(mut reg) = node.reg() {
+                    if let Some(region) = reg.next() {
+                        devices.push(region.starting_address as usize);
+                    }
+                }
+            }
+        }
+    }
+    devices
 }

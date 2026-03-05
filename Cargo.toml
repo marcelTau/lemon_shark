@@ -1,3 +1,7 @@
+[workspace]
+members = [".", "filesystem"]
+resolver = "2"
+
 [package]
 name = "lemon_shark"
 version = "0.1.0"
@@ -7,6 +11,7 @@ edition = "2024"
 fdt = { version = "0.1.5", features = ["pretty-printing"] }
 spin = "0.10.0"
 virtio-drivers = "0.12.0"
+filesystem = { path = "filesystem" }
 
 [[bin]]
 name = "lemon_shark"

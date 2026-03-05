@@ -1,4 +1,4 @@
-use crate::filesystem::{BlockIndex, BLOCK_SIZE};
+use crate::filesystem::{BLOCK_SIZE, BlockIndex};
 
 pub(crate) const RAMDISK_SIZE: usize = 1024 * 1024;
 

@@ -3,11 +3,9 @@
 
 use core::arch::global_asm;
 use lemon_shark::{
-    device_tree,
-    filesystem::{self, BlockDevice},
-    interrupts, println, shell, trap_handler,
-    virtio2::{self, DeviceAllocator},
-    ALLOCATOR,
+    ALLOCATOR, device_tree,
+    filesystem::{self, KernelBlockDevice},
+    interrupts, println, shell, trap_handler, virtio2,
 };
 
 // This is the section that we mapped first in the linker script `linker.ld`
@@ -24,18 +22,6 @@ global_asm!(
     "   call _start",
 );
 
-extern crate alloc;
-use alloc::vec;
-use core::ptr::NonNull;
-use fdt::{node::FdtNode, standard_nodes::Compatible, Fdt};
-use virtio_drivers::{
-    device::blk::VirtIOBlk,
-    transport::{
-        mmio::{MmioTransport, VirtIOHeader},
-        DeviceType, Transport,
-    },
-};
-
 #[cfg(not(test))]
 #[unsafe(no_mangle)]
 extern "C" fn _start(_: usize, device_table_addr: usize) -> ! {
@@ -46,7 +32,7 @@ extern "C" fn _start(_: usize, device_table_addr: usize) -> ! {
     device_tree::init(device_table_addr);
 
     let virtio_device = virtio2::make_device();
-    filesystem::init_with_device(BlockDevice::VirtIO(virtio_device));
+    filesystem::init_with_device(KernelBlockDevice::VirtIO(virtio_device));
 
     print_welcome();
 
