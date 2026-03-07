@@ -1269,6 +1269,13 @@ mod tests {
         let max_entries_for_inode = 16 * DIR_ENTRY_PER_BLOCK;
         let full_size = (max_entries_for_inode * core::mem::size_of::<DirEntry>()) as u32;
 
+        let mut inode = fs.inode_cache.get_mut(cap, &mut fs.block_device);
+
+        inode.size = full_size;
+        for block in inode.blocks.iter_mut().filter(|b| b.is_none()) {
+            *block = DataBlockIndex::from_raw_unchecked(1);
+        }
+
         fs.inode_cache.get_mut(cap, &mut fs.block_device).size = full_size;
 
         let overflow = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

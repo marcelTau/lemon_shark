@@ -4,7 +4,6 @@ use crate::virtio2::LockedBlockDevice;
 use crate::{print, println, ramdisk};
 use ::filesystem::{BlockDevice, Filesystem};
 use alloc::string::String;
-use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 pub use ::filesystem::{BLOCK_SIZE, BlockIndex, Error, INodeIndex};
@@ -128,22 +127,22 @@ static FS: spin::Mutex<LockedFilesystem> = spin::Mutex::new(LockedFilesystem::ne
 static FS_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
 struct LockedFilesystem {
-    inner: UnsafeCell<Option<Filesystem<KernelBlockDevice>>>,
+    inner: Option<Filesystem<KernelBlockDevice>>,
 }
 
 impl LockedFilesystem {
     pub const fn new() -> Self {
         Self {
-            inner: UnsafeCell::new(None),
+            inner: None,
         }
     }
 
     fn get(&mut self) -> &mut Filesystem<KernelBlockDevice> {
-        self.inner.get_mut().as_mut().unwrap()
+        self.inner.as_mut().unwrap()
     }
 
     pub fn init(&mut self, filesystem: Filesystem<KernelBlockDevice>) {
-        *self.inner.get_mut() = Some(filesystem);
+        self.inner = Some(filesystem);
     }
 
     pub fn mkdir(&mut self, path: &str) -> Result<INodeIndex, Error> {

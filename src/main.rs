@@ -25,11 +25,11 @@ global_asm!(
 #[cfg(not(test))]
 #[unsafe(no_mangle)]
 extern "C" fn _start(_: usize, device_table_addr: usize) -> ! {
+    unsafe { ALLOCATOR.init() };
     lemon_shark::klog::init();
+    virtio2::init_console();
     trap_handler::init();
     interrupts::init();
-    unsafe { ALLOCATOR.init() };
-    virtio2::init_console();
 
     device_tree::init(device_table_addr);
 
