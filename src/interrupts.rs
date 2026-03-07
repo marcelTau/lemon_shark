@@ -1,7 +1,4 @@
-#![allow(unused)]
 use core::arch::asm;
-
-use crate::logln;
 
 /// Enables interrupts globally and enables the timer interrupt
 /// https://people.eecs.berkeley.edu/~krste/papers/riscv-privileged-v1.9.1.pdf
@@ -12,7 +9,7 @@ pub fn init() {
         asm!("csrs sstatus, {}", in(reg) 1 << 1); // SIE
     }
 
-    logln!("Timer interrupt enabled");
+    log::info!("Timer interrupt enabled");
 }
 
 pub fn without_interrupts<F, R>(f: F) -> R

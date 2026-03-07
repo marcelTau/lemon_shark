@@ -7,7 +7,7 @@
 use core::arch::global_asm;
 
 use lemon_shark::allocator::FreeListAllocator;
-use lemon_shark::{interrupts, logln, trap_handler};
+use lemon_shark::{interrupts, trap_handler};
 
 use core::arch::asm;
 
@@ -908,7 +908,7 @@ fn test_fragmentation_max() {
 
     // Should have many free blocks now
     let blocks_fragmented = alloc.free_blocks();
-    logln!("Fragmented blocks: {}", blocks_fragmented);
+    println!("Fragmented blocks: {}", blocks_fragmented);
 
     // Free the rest
     for i in (1..100).step_by(2) {

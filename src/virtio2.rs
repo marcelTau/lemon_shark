@@ -1,4 +1,5 @@
 use virtio_drivers::device::blk::VirtIOBlk;
+use virtio_drivers::device::console::VirtIOConsole;
 use virtio_drivers::transport::Transport;
 use virtio_drivers::transport::mmio::{MmioTransport, VirtIOHeader};
 use virtio_drivers::{BufferDirection, Hal, PAGE_SIZE, PhysAddr};
@@ -9,6 +10,44 @@ use alloc::alloc::{Layout, alloc_zeroed, dealloc};
 use crate::filesystem::BlockIndex;
 use crate::println;
 use core::ptr::NonNull;
+use spin::Mutex;
+
+static CONSOLE: Mutex<Option<VirtIOConsole<DeviceAllocator, MmioTransport<'static>>>> =
+    Mutex::new(None);
+
+/// Initialise the VirtIO console device at MMIO slot 0x10007000.
+/// Must be called after the allocator is initialised.
+pub fn init_console() {
+    // Scan all 8 virtio MMIO slots to find the console device.
+    // Slots are at 0x10001000..=0x10008000 in 0x1000 increments.
+    use virtio_drivers::transport::DeviceType;
+    for slot in (0x10001000usize..=0x10008000).step_by(0x1000) {
+        let header = NonNull::new(slot as *mut VirtIOHeader).unwrap();
+        let transport = match unsafe { MmioTransport::new(header, 0x1000) } {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        if transport.device_type() == DeviceType::Console {
+            if let Ok(console) = VirtIOConsole::<DeviceAllocator, MmioTransport>::new(transport) {
+                *CONSOLE.lock() = Some(console);
+                return;
+            }
+        }
+    }
+}
+
+/// Write bytes to the VirtIO console log channel.
+/// Returns false if the console is not yet initialised.
+pub fn console_write(bytes: &[u8]) -> bool {
+    let mut guard = CONSOLE.lock();
+    match guard.as_mut() {
+        Some(console) => {
+            let _ = console.send_bytes(bytes);
+            true
+        }
+        None => false,
+    }
+}
 
 pub struct LockedBlockDevice<'a> {
     disk: VirtIOBlk<DeviceAllocator, MmioTransport<'a>>,

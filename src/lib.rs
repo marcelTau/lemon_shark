@@ -11,7 +11,7 @@ pub mod allocator;
 pub mod device_tree;
 pub mod filesystem;
 pub mod interrupts;
-pub mod log;
+pub mod klog;
 pub mod println;
 pub mod ramdisk;
 pub mod shell;
@@ -29,18 +29,11 @@ use core::panic::PanicInfo;
 fn panic_handler(info: &PanicInfo) -> ! {
     let msg = info.message();
     if let Some(loc) = info.location() {
-        // #[cfg(not(feature = "logging"))]
-        {
-            println!("[PANIC] oh shit ... {msg} in {}:{}", loc.file(), loc.line());
-        }
-        logln!("[PANIC] oh shit ... {msg} in {}:{}", loc.file(), loc.line());
+        println!("[PANIC] oh shit ... {msg} in {}:{}", loc.file(), loc.line());
+        log::info!("[PANIC] oh shit ... {msg} in {}:{}", loc.file(), loc.line());
     } else {
-        logln!("[PANIC] oh shit ... {msg}");
-
-        // #[cfg(not(feature = "logging"))]
-        {
-            println!("[PANIC] oh shit ... {msg}");
-        }
+        println!("[PANIC] oh shit ... {msg}");
+        log::info!("[PANIC] oh shit ... {msg}");
     }
 
     #[cfg(test)]

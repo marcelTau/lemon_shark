@@ -87,7 +87,7 @@ impl Bitmap {
         for (arr_idx, bits) in self.arr.iter().enumerate() {
             if bits != &u32::MAX {
                 let res = (!bits).trailing_zeros();
-                crate::fs_log!("[FS] find free found at {arr_idx} {res}");
+                log::debug!("[FS] find free found at {arr_idx} {res}");
                 return Some(arr_idx as u32 * 32 + res);
             }
         }

@@ -25,9 +25,11 @@ global_asm!(
 #[cfg(not(test))]
 #[unsafe(no_mangle)]
 extern "C" fn _start(_: usize, device_table_addr: usize) -> ! {
+    lemon_shark::klog::init();
     trap_handler::init();
     interrupts::init();
     unsafe { ALLOCATOR.init() };
+    virtio2::init_console();
 
     device_tree::init(device_table_addr);
 
@@ -35,6 +37,9 @@ extern "C" fn _start(_: usize, device_table_addr: usize) -> ! {
     filesystem::init_with_device(KernelBlockDevice::VirtIO(virtio_device));
 
     print_welcome();
+
+    println!("Hello normal");
+    log::debug!("Hello debug");
 
     shell::shell()
 }

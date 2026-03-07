@@ -1,4 +1,4 @@
-use crate::{logln, println};
+use crate::println;
 use core::arch::asm;
 use core::arch::naked_asm;
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -217,5 +217,5 @@ pub fn init() {
     setup_trap_stack();
     setup_trap_handler();
 
-    logln!("[Trap Handler] initialized");
+    log::info!("[Trap Handler] initialized");
 }

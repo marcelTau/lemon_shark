@@ -1,6 +1,7 @@
 extern crate alloc;
+use crate::println::UartWriter;
 use crate::virtio2::LockedBlockDevice;
-use crate::{logln, print, println, ramdisk};
+use crate::{print, println, ramdisk};
 use ::filesystem::{BlockDevice, Filesystem};
 use alloc::string::String;
 use core::cell::UnsafeCell;
@@ -154,7 +155,7 @@ impl LockedFilesystem {
     }
 
     fn dump_dir(&mut self, index: u32) {
-        self.get().dump_dir(index)
+        self.get().dump_dir(index, &mut UartWriter)
     }
 
     fn dump(&mut self) {
@@ -174,7 +175,7 @@ impl LockedFilesystem {
     }
 
     fn tree(&mut self) {
-        self.get().tree()
+        self.get().tree(&mut UartWriter)
     }
 
     fn flush(&mut self) {
@@ -236,7 +237,7 @@ pub fn init_with_device(dev: KernelBlockDevice) {
         .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
         .is_err()
     {
-        logln!("[FS] Not initializing the Filesystem again!");
+        log::info!("[FS] Not initializing the Filesystem again!");
         return;
     }
 
@@ -244,5 +245,5 @@ pub fn init_with_device(dev: KernelBlockDevice) {
 
     (*FS.lock()).init(fs);
 
-    logln!("[FS] Initialized");
+    log::info!("[FS] Initialized");
 }

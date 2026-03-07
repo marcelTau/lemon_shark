@@ -2,7 +2,6 @@ use core::alloc::{GlobalAlloc, Layout};
 use core::cell::UnsafeCell;
 use core::mem;
 
-use crate::logln;
 use crate::println;
 
 use core::ops::ControlFlow;
@@ -109,7 +108,7 @@ impl FreeListAllocator {
             (*aligned_ptr.as_ptr()).size = heap_size - mem::size_of::<FreeBlock>();
             (*aligned_ptr.as_ptr()).next = None;
 
-            logln!(
+            log::info!(
                 "[ALLOC] Initialized allocator at {:#x} with size of {:#x} ({}KB)",
                 bounds.start,
                 (*aligned_ptr.as_ptr()).size,
@@ -168,7 +167,7 @@ impl FreeListAllocator {
         let align = layout.align().max(8);
         let size = align_up(layout.size(), 8);
 
-        logln!(
+        log::trace!(
             "[ALLOC] allocating {size} (req: {}) bytes with alignment {align} (req: {})",
             layout.size(),
             layout.align()
@@ -180,7 +179,7 @@ impl FreeListAllocator {
                     return ControlFlow::Continue(());
                 };
 
-                logln!("[ALLOC] Found block to allocate");
+                log::trace!("[ALLOC] Found block to allocate");
 
                 let block_ptr = *block.as_ptr();
 
@@ -196,11 +195,11 @@ impl FreeListAllocator {
                     (block.as_addr() + block_ptr.size) - (aligned_ptr.as_addr() + size);
 
                 if bytes_left >= required_size {
-                    logln!("[ALLOC] Splitting block to the left");
+                    log::trace!("[ALLOC] Splitting block to the left");
                 }
 
                 if bytes_right >= required_size {
-                    logln!("[ALLOC] Splitting block to the right");
+                    log::trace!("[ALLOC] Splitting block to the right");
                 }
 
                 let metadata = match (bytes_left >= required_size, bytes_right >= required_size) {
@@ -264,10 +263,10 @@ impl FreeListAllocator {
                     }
                 };
 
-                logln!("[ALLOC] AllocationMetaData: {metadata:#0x?}");
+                log::trace!("[ALLOC] AllocationMetaData: {metadata:#0x?}");
 
                 aligned_ptr.write_metadata(metadata);
-                logln!("[ALLOC] wrote metadata");
+                log::trace!("[ALLOC] wrote metadata");
                 ControlFlow::Break(aligned_ptr)
             })
         };
@@ -289,7 +288,7 @@ impl FreeListAllocator {
 
         let new_block: AlignedPtr<FreeBlock> = AlignedPtr::new(start_addr);
 
-        logln!("[ALLOC] deallocating {size} bytes at {start_addr:#x}",);
+        log::trace!("[ALLOC] deallocating {size} bytes at {start_addr:#x}",);
 
         unsafe {
             (*new_block.as_ptr()).size = size;
@@ -297,7 +296,7 @@ impl FreeListAllocator {
         }
 
         if self.head.is_none() {
-            logln!("Head is none!");
+            log::trace!("Head is none!");
             self.head = Some(new_block);
             return;
         }
@@ -306,7 +305,7 @@ impl FreeListAllocator {
             let head = self.head.unwrap();
 
             if start_addr < head.as_addr() {
-                logln!(
+                log::trace!(
                     "start_addr={start_addr} size={size} head={:#x?} diff={}",
                     head.as_addr(),
                     head.as_addr() - (start_addr + size),
@@ -337,7 +336,7 @@ impl FreeListAllocator {
             let merge_left = (prev.as_addr()) + (*prev.as_ptr()).size == start_addr;
             let merge_right = next.is_some_and(|next| start_addr + size == next.as_addr());
 
-            logln!(
+            log::trace!(
                 "[ALLOC] merge_left: {}, merge_right: {}",
                 merge_left,
                 merge_right

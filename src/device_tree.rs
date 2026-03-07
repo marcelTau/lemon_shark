@@ -1,4 +1,3 @@
-use crate::logln;
 use core::{cell::UnsafeCell, str::FromStr};
 
 extern crate alloc;
@@ -174,7 +173,7 @@ impl SystemInfo {
 
 pub fn init(fdt_addr: usize) {
     (*SYSINFO.lock()).init(fdt_addr);
-    logln!("[DEVICE TREE] initialized");
+    log::info!("[DEVICE TREE] initialized");
 }
 
 pub fn timer_frequency() -> usize {

@@ -61,6 +61,7 @@ pub enum Error {
     NoSpaceForDirEntry,
     NotAFile,
     NoSpaceInFile,
+    OutOfMemory,
 }
 
 impl core::error::Error for Error {}
@@ -106,6 +107,10 @@ impl INode {
             is_directory: false,
             blocks: core::array::from_fn(|_| Default::default()),
         }
+    }
+
+    fn has_space(&self) -> bool {
+        self.blocks.iter().any(DataBlockIndex::is_none)
     }
 
     fn from_bytes(bytes: &[u8]) -> Self {
@@ -253,7 +258,7 @@ struct INodeCache {
 impl INodeCache {
     pub fn new(layout: Layout) -> Self {
         let size = layout.inode_bitmap_blocks * BLOCK_SIZE;
-        crate::fs_log!("INodeCache size={size}");
+        log::debug!("INodeCache size={size}");
         Self {
             inodes: Vec::new(),
             layout: Some(layout),
@@ -350,7 +355,7 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
 
         match sb.magic {
             0 => {
-                crate::fs_log!("[FS] Empty disk. Creating new superblock");
+                log::info!("[FS] Empty disk. Creating new superblock");
                 let total_blocks = block_device.total_blocks() as u32;
                 (
                     SuperBlock {
@@ -362,7 +367,7 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
                 )
             }
             MAGIC => {
-                crate::fs_log!("[FS] Found superblock on disk: {sb:?}");
+                log::info!("[FS] Found superblock on disk: {sb:?}");
                 (sb, true)
             }
             _ => panic!("Disk has wrong format"),
@@ -374,8 +379,8 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
 
         let layout = Layout::new(sb.total_blocks);
 
-        crate::fs_log!("[FS] Generated layout: {layout:?}");
-        crate::fs_log!(
+        log::info!("[FS] Generated layout: {layout:?}");
+        log::info!(
             "Inode bitmap size = {}",
             BLOCK_SIZE * layout.inode_bitmap_blocks
         );
@@ -390,7 +395,7 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
             );
         }
 
-        crate::fs_log!(
+        log::info!(
             "Data bitmap size = {}",
             BLOCK_SIZE * layout.data_bitmap_blocks
         );
@@ -406,9 +411,9 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
         }
 
         let (inode_bitmap, data_bitmap) = if is_initialized {
-            crate::fs_log!("Reading inode_bitmap");
+            log::info!("Reading inode_bitmap");
             let inode_bitmap = Bitmap::from_bytes(&inode_bitmap_raw);
-            crate::fs_log!("Reading data_bitmap");
+            log::info!("Reading data_bitmap");
             let data_bitmap = Bitmap::from_bytes(&data_bitmap_raw);
 
             (inode_bitmap, data_bitmap)
@@ -463,9 +468,7 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
 
         self.block_device.read_block(block_index, &mut buf);
 
-        crate::fs_log!(
-            "[FS] Writing to block index {block_index:?} at byte_offset={byte_offset:?}"
-        );
+        log::trace!("[FS] Writing to block index {block_index:?} at byte_offset={byte_offset:?}");
 
         buf[byte_offset.range::<INode>()].copy_from_slice(inode.to_bytes().as_slice());
 
@@ -476,7 +479,7 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
     fn new_inode(&mut self, inode: &INode) -> INodeIndex {
         let free = INodeIndex::new(self.inode_bitmap.find_free().unwrap());
 
-        crate::fs_log!("[FS] Writing INode to {free:?} in {:?}", self.inode_bitmap);
+        log::trace!("[FS] Writing INode to {free:?} in {:?}", self.inode_bitmap);
 
         self.inode_bitmap.set(free.inner());
 
@@ -526,6 +529,16 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
             current_index = next_inode;
         }
 
+        let parent_inode = self.inode_cache.get(current_index, &mut self.block_device);
+
+        if !parent_inode.is_directory {
+            return Err(Error::NotADirectory);
+        }
+
+        if !parent_inode.has_space() {
+            return Err(Error::NoSpaceForDirEntry);
+        }
+
         if !self
             .inode_cache
             .get(current_index, &mut self.block_device)
@@ -564,9 +577,9 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
             let parent = DirEntry::new(String::from(".."), prev_index);
             self.write_dir_entry(this, inode_index).unwrap();
             self.write_dir_entry(parent, inode_index).unwrap();
-            crate::fs_log!("Created new directory {name} at inode {inode_index:?}");
+            log::trace!("Created new directory {name} at inode {inode_index:?}");
         } else {
-            crate::fs_log!("Created new file {name} at inode {inode_index:?}");
+            log::trace!("Created new file {name} at inode {inode_index:?}");
         }
 
         Ok(inode_index)
@@ -593,7 +606,7 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
         // Get the index into the blocks of the `INode`
         let inode_internal_block_index = current_entries / DIR_ENTRY_PER_BLOCK;
 
-        crate::fs_log!(
+        log::trace!(
             "[FS] Writing DirEntry {entry:?} at block_index={inode_internal_block_index:?}"
         );
 
@@ -688,7 +701,7 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
         self.write_dir_entry(this, root_inode_index).unwrap();
         self.write_dir_entry(this_too, root_inode_index).unwrap();
 
-        crate::fs_log!("[FS] Filesystem initialized with empty root directory");
+        log::info!("[FS] Filesystem initialized with empty root directory");
     }
 
     fn append_to_file(&mut self, inode_index: INodeIndex, bytes: &[u8]) -> Result<usize, Error> {
@@ -712,7 +725,7 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
             let last_used_block_index = inode.size as usize / BLOCK_SIZE;
 
             if inode.blocks[last_used_block_index].is_none() {
-                let free = self.data_bitmap.find_free().unwrap();
+                let free = self.data_bitmap.find_free().ok_or(Error::OutOfMemory)?;
                 let free_block_index = self.layout.data_block(free);
                 inode.blocks[last_used_block_index] = free_block_index;
                 self.data_bitmap.set(free);
@@ -722,7 +735,7 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
             let byte_offset = inode.size % BLOCK_SIZE as u32;
 
             let bytes_to_write = total_bytes.min(BLOCK_SIZE - byte_offset as usize);
-            crate::fs_log!("[FS] Writing {}/{} bytes", bytes_to_write, total_bytes);
+            log::debug!("[FS] Writing {}/{} bytes", bytes_to_write, total_bytes);
 
             let block_index = self.layout.data_to_block(data_block_index);
 
@@ -775,7 +788,7 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
         self.block_device.write_block(BlockIndex::from_raw(0), &buf);
     }
 
-    pub fn dump_dir(&mut self, index: u32) {
+    pub fn dump_dir(&mut self, index: u32, out: &mut impl core::fmt::Write) {
         let inode_index = INodeIndex::new(index);
         let mut buf = [0u8; BLOCK_SIZE];
 
@@ -791,14 +804,19 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
 
                 // only print the directories that have a name
                 if entry.name.iter().any(|c| *c != 0) {
-                    crate::fs_log!("\t{entry:?}");
+                    let _ = writeln!(out, "\t{entry:?}");
                 }
             }
         }
     }
 
-    pub fn tree(&mut self) {
-        fn inner(fs: &mut Filesystem<impl BlockDevice>, entry: &DirEntry, indent: u8) {
+    pub fn tree(&mut self, out: &mut impl core::fmt::Write) {
+        fn inner(
+            fs: &mut Filesystem<impl BlockDevice>,
+            entry: &DirEntry,
+            indent: u8,
+            out: &mut impl core::fmt::Write,
+        ) {
             let entries = fs.read_dir_entry(entry.inode);
 
             if !entries.iter().any(|e| {
@@ -812,27 +830,27 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
             let inode = fs.inode_cache.get(entry.inode, &mut fs.block_device);
 
             if inode.is_directory {
-                crate::fs_log!("{}{}", " ".repeat(indent as usize), entry.name());
+                let _ = writeln!(out, "{}{}", " ".repeat(indent as usize), entry.name());
             }
 
             for entry in entries.iter().filter(|e| !e.name().starts_with('.')) {
-                inner(fs, entry, indent + 2);
+                inner(fs, entry, indent + 2, out);
                 if !fs
                     .inode_cache
                     .get(entry.inode, &mut fs.block_device)
                     .is_directory
                 {
-                    crate::fs_log!("{}{}", " ".repeat(indent as usize + 2), entry.name());
+                    let _ = writeln!(out, "{}{}", " ".repeat(indent as usize + 2), entry.name());
                 }
             }
         }
 
         let root_entries = self.read_dir_entry(INodeIndex::new(0));
 
-        crate::fs_log!("root_entries={root_entries:?}");
+        let _ = writeln!(out, "root_entries={root_entries:?}");
 
         for root_entry in root_entries.iter().filter(|e| !e.name().starts_with('.')) {
-            inner(self, root_entry, 0);
+            inner(self, root_entry, 0, out);
         }
     }
 
@@ -882,7 +900,7 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
             self.block_device.write_block(block, chunk);
         }
 
-        crate::fs_log!("[FS] Flushed");
+        log::debug!("[FS] Flushed");
     }
 
     pub fn mkdir(&mut self, path: &str) -> Result<INodeIndex, Error> {
@@ -1248,8 +1266,8 @@ mod tests {
         let mut fs = make_fs();
 
         let cap = fs.mkdir("/cap").unwrap();
-        let max_entries = 16 * DIR_ENTRY_PER_BLOCK;
-        let full_size = (max_entries * core::mem::size_of::<DirEntry>()) as u32;
+        let max_entries_for_inode = 16 * DIR_ENTRY_PER_BLOCK;
+        let full_size = (max_entries_for_inode * core::mem::size_of::<DirEntry>()) as u32;
 
         fs.inode_cache.get_mut(cap, &mut fs.block_device).size = full_size;
 

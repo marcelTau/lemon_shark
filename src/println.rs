@@ -1,7 +1,5 @@
 //! This is supposed to be used as output for the user, i.e in the shell
-//! implementation. Logging can be done via the `log!` & `logln!` macros.
-//! Currently both do the same thing as I haven't figured out how to separate
-//! the streams in a nice way.
+//! implementation.
 
 fn write_char_to_uart(c: char) {
     /// The UART is a hardware device which QEMU reads from and displays in

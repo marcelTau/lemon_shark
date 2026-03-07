@@ -8,7 +8,7 @@
 
 #![allow(unused)]
 
-use crate::{logln, println};
+use crate::println;
 
 // virtio_mmio@10008000 {
 //     interrupts = <0x8>
