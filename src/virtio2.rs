@@ -30,6 +30,7 @@ pub fn init_console() {
         if transport.device_type() == DeviceType::Console {
             if let Ok(console) = VirtIOConsole::<DeviceAllocator, MmioTransport>::new(transport) {
                 *CONSOLE.lock() = Some(console);
+                crate::klog::flush_early_buffer();
                 return;
             }
         }
@@ -57,20 +58,8 @@ impl LockedBlockDevice<'_> {
     fn new() -> Self {
         let header = NonNull::new(0x10008000 as *mut VirtIOHeader).unwrap();
 
-        let transport = match unsafe { MmioTransport::new(header, 0x1000) } {
-            Err(e) => panic!("Error creating VirtIO MMIO transport: {}", e),
-            Ok(transport) => {
-                println!(
-                    "Detected virtio MMIO device with vendor id {:#X}, device type {:?}, version {:?}",
-                    transport.vendor_id(),
-                    transport.device_type(),
-                    transport.version(),
-                );
-                transport
-            }
-        };
-
-        println!("Found header: {transport:?}");
+        let transport = unsafe { MmioTransport::new(header, 0x1000) }
+            .unwrap_or_else(|e| panic!("Error creating VirtIO MMIO transport: {}", e));
 
         Self {
             disk: VirtIOBlk::<DeviceAllocator, MmioTransport>::new(transport).unwrap(),

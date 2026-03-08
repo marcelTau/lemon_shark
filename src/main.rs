@@ -5,7 +5,7 @@ use core::arch::global_asm;
 use lemon_shark::{
     ALLOCATOR, device_tree,
     filesystem::{self, KernelBlockDevice},
-    interrupts, println, shell, trap_handler, virtio2,
+    interrupts, println, shell, timer, trap_handler, virtio2,
 };
 
 // This is the section that we mapped first in the linker script `linker.ld`
@@ -27,6 +27,8 @@ global_asm!(
 extern "C" fn _start(_: usize, device_table_addr: usize) -> ! {
     unsafe { ALLOCATOR.init() };
     lemon_shark::klog::init();
+    log::warn!("========== Kernel started ==========");
+
     virtio2::init_console();
     trap_handler::init();
     interrupts::init();
@@ -38,8 +40,10 @@ extern "C" fn _start(_: usize, device_table_addr: usize) -> ! {
 
     print_welcome();
 
-    println!("Hello normal");
-    log::debug!("Hello debug");
+    log::warn!(
+        "========== Boot completed {}ms ==========",
+        timer::uptime_ms()
+    );
 
     shell::shell()
 }

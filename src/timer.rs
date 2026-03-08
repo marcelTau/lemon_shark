@@ -34,3 +34,8 @@ pub fn uptime() -> usize {
     let freq = crate::device_tree::timer_frequency();
     rdtime() / freq
 }
+
+pub fn uptime_ms() -> usize {
+    let freq = crate::device_tree::timer_frequency() / 1000;
+    rdtime() / freq
+}

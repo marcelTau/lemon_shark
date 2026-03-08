@@ -217,5 +217,5 @@ pub fn init() {
     setup_trap_stack();
     setup_trap_handler();
 
-    log::info!("[Trap Handler] initialized");
+    log::info!("initialized");
 }

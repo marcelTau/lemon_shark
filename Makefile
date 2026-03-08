@@ -29,18 +29,10 @@ reset_disk:
 run:
 	@cargo build
 	@echo "Running: $(QEMU) $(ARGS)"
+	@truncate -s 0 kernel.log
 	@$(QEMU) $(ARGS)
 
 test:
 	@cargo test
-
-
-
-#	qemu-system-riscv64 \
-#   -machine virt \
-#   -bios default \
-#   -cpu rv64 \
-#   -nographic \
-#   -kernel ./target/riscv64gc-unknown-none-elf/debug/lemon_shark \
-#   -drive file=disk.img,if=none,id=hd0,format=raw \
-#   -device virtio-blk-device,drive=hd0
+	@cargo test -p allocator --target x86_64-unknown-linux-gnu
+	@cargo test -p filesystem --target x86_64-unknown-linux-gnu

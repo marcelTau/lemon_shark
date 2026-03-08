@@ -2,11 +2,11 @@ extern crate alloc;
 use crate::println::UartWriter;
 use crate::virtio2::LockedBlockDevice;
 use crate::{print, println, ramdisk};
-use ::filesystem::{BlockDevice, Filesystem};
 use alloc::string::String;
 use core::sync::atomic::{AtomicBool, Ordering};
+use filesystem::{BlockDevice, Filesystem};
 
-pub use ::filesystem::{BLOCK_SIZE, BlockIndex, Error, INodeIndex};
+pub use filesystem::{BLOCK_SIZE, BlockIndex, Error, INodeIndex};
 
 /// The concrete block device used by the kernel, wrapping either the in-memory
 /// ramdisk or the VirtIO persistent storage.
@@ -132,9 +132,7 @@ struct LockedFilesystem {
 
 impl LockedFilesystem {
     pub const fn new() -> Self {
-        Self {
-            inner: None,
-        }
+        Self { inner: None }
     }
 
     fn get(&mut self) -> &mut Filesystem<KernelBlockDevice> {
@@ -236,7 +234,7 @@ pub fn init_with_device(dev: KernelBlockDevice) {
         .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
         .is_err()
     {
-        log::info!("[FS] Not initializing the Filesystem again!");
+        log::info!("not initializing the filesystem again");
         return;
     }
 
@@ -244,5 +242,5 @@ pub fn init_with_device(dev: KernelBlockDevice) {
 
     (*FS.lock()).init(fs);
 
-    log::info!("[FS] Initialized");
+    log::info!("initialized");
 }

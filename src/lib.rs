@@ -30,10 +30,10 @@ fn panic_handler(info: &PanicInfo) -> ! {
     let msg = info.message();
     if let Some(loc) = info.location() {
         println!("[PANIC] oh shit ... {msg} in {}:{}", loc.file(), loc.line());
-        log::info!("[PANIC] oh shit ... {msg} in {}:{}", loc.file(), loc.line());
+        log::error!("oh shit ... {msg} in {}:{}", loc.file(), loc.line());
     } else {
         println!("[PANIC] oh shit ... {msg}");
-        log::info!("[PANIC] oh shit ... {msg}");
+        log::error!("oh shit ... {msg}");
     }
 
     #[cfg(test)]

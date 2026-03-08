@@ -173,7 +173,7 @@ impl SystemInfo {
 
 pub fn init(fdt_addr: usize) {
     (*SYSINFO.lock()).init(fdt_addr);
-    log::info!("[DEVICE TREE] initialized");
+    log::info!("initialized");
 }
 
 pub fn timer_frequency() -> usize {
