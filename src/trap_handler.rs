@@ -1,7 +1,7 @@
 use crate::println;
 use core::arch::asm;
 use core::arch::naked_asm;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, Ordering, AtomicUsize};
 
 /// Atomic that indicates that there was a `TRAP`.
 pub static TRAP: AtomicBool = AtomicBool::new(false);
@@ -124,6 +124,7 @@ pub extern "C" fn trap_handler() -> ! {
            "ld t4, 40(sp)",
            "ld t5, 48(sp)",
            "ld t6, 56(sp)",
+           "ld a0, 64(sp)",
            "ld a1, 72(sp)",
            "ld a2, 80(sp)",
            "ld a3, 88(sp)",
@@ -157,11 +158,10 @@ extern "C" fn trap_handler_rust() {
 
     let scause = Scause(scause);
 
-    println!("TRAP at {sepc:#0x?} ({scause:?})");
 
     match scause.reason() {
         ScauseReason::SupervisorTimerInterrupt => {
-            crate::timer::new_time(1000000000);
+            crate::timer::new_time(1);
 
             // Setting the TRAP to true if it's currently false, not changing it if it's true.
             // Don't care about the result here.
@@ -183,7 +183,9 @@ extern "C" fn trap_handler_rust() {
                 asm!("csrw sepc, {}", in(reg) sepc + ebreak_size);
             }
         }
-        _ => {}
+        _ => {
+            log::debug!("TRAP at {sepc:#0x?} ({scause:?})");
+        }
     }
 }
 
