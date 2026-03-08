@@ -3,6 +3,13 @@
 version = 4
 
 [[package]]
+name = "allocator"
+version = "0.1.0"
+dependencies = [
+ "log",
+]
+
+[[package]]
 name = "bitflags"
 version = "2.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -42,6 +49,7 @@ dependencies = [
 name = "lemon_shark"
 version = "0.1.0"
 dependencies = [
+ "allocator",
  "fdt",
  "filesystem",
  "log",

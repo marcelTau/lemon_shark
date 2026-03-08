@@ -33,13 +33,15 @@ pub extern "C" fn _start(_: usize, _: usize) -> ! {
 
 #[test_case]
 fn allocator_init() {
-    let mut alloc = FreeListAllocator { head: None };
-    unsafe { alloc.init() };
+    let mut alloc = FreeListAllocator::default();
+    let bounds = unsafe { HeapBounds::new() };
+    unsafe { alloc.init(bounds.start, bounds.end) };
 }
 
 fn make_alloc() -> FreeListAllocator {
-    let mut alloc = FreeListAllocator { head: None };
-    unsafe { alloc.init() };
+    let mut alloc = FreeListAllocator::default();
+    let bounds = unsafe { HeapBounds::new() };
+    unsafe { alloc.init(bounds.start, bounds.end) };
     alloc
 }
 
@@ -117,7 +119,7 @@ fn fragmentation_and_merge() {
     assert_eq!(alloc.free_blocks(), 1);
     assert_eq!(alloc.free(), initial_free);
 
-    alloc.dump_state();
+    alloc.dump_state(&mut UartWriter);
 }
 
 #[test_case]
@@ -145,7 +147,7 @@ fn fragmentation_and_merging2() {
 
     alloc.dealloc(d, layout_16);
 
-    alloc.dump_state();
+    alloc.dump_state(&mut UartWriter);
 
     assert_eq!(alloc.free_blocks(), 1);
     assert_eq!(init, alloc.free());
@@ -909,7 +911,10 @@ fn test_fragmentation_max() {
 
     // Should have many free blocks now
     let blocks_fragmented = alloc.free_blocks();
-    println!("Fragmented blocks: {}", blocks_fragmented);
+    {
+        use core::fmt::Write;
+        let _ = core::write!(UartWriter, "Fragmented blocks: {}\n", blocks_fragmented);
+    }
 
     // Free the rest
     for i in (1..100).step_by(2) {

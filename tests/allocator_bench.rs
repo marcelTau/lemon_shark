@@ -7,7 +7,7 @@
 use core::arch::global_asm;
 
 use core::arch::asm;
-use lemon_shark::allocator::FreeListAllocator;
+use lemon_shark::allocator::{FreeListAllocator, HeapBounds};
 use lemon_shark::{interrupts, timer, trap_handler};
 
 global_asm!(
@@ -30,8 +30,9 @@ pub extern "C" fn _start(_: usize, _: usize) -> ! {
 }
 
 fn make_alloc() -> FreeListAllocator {
-    let mut alloc = FreeListAllocator { head: None };
-    unsafe { alloc.init() };
+    let mut alloc = FreeListAllocator::default();
+    let bounds = unsafe { HeapBounds::new() };
+    unsafe { alloc.init(bounds.start, bounds.end) };
     alloc
 }
 
