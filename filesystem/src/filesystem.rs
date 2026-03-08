@@ -62,6 +62,7 @@ pub enum Error {
     NotAFile,
     NoSpaceInFile,
     OutOfMemory,
+    NoNameProvided,
 }
 
 impl core::error::Error for Error {}
@@ -93,7 +94,7 @@ pub(crate) struct INode {
 }
 
 impl INode {
-    fn empty_directory() -> Self {
+    fn new_empty_directory() -> Self {
         INode {
             size: 0,
             is_directory: true,
@@ -101,7 +102,7 @@ impl INode {
         }
     }
 
-    fn empty_file() -> Self {
+    fn new_empty_file() -> Self {
         INode {
             size: 0,
             is_directory: false,
@@ -355,7 +356,7 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
 
         match sb.magic {
             0 => {
-                log::info!("[FS] Empty disk. Creating new superblock");
+                log::info!("empty disk, creating new superblock");
                 let total_blocks = block_device.total_blocks() as u32;
                 (
                     SuperBlock {
@@ -367,7 +368,7 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
                 )
             }
             MAGIC => {
-                log::info!("[FS] Found superblock on disk: {sb:?}");
+                log::info!("found superblock on disk: {sb:?}");
                 (sb, true)
             }
             _ => panic!("Disk has wrong format"),
@@ -379,7 +380,7 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
 
         let layout = Layout::new(sb.total_blocks);
 
-        log::info!("[FS] Generated layout: {layout:?}");
+        log::info!("generated layout: {layout:?}");
         log::info!(
             "Inode bitmap size = {}",
             BLOCK_SIZE * layout.inode_bitmap_blocks
@@ -468,7 +469,7 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
 
         self.block_device.read_block(block_index, &mut buf);
 
-        log::trace!("[FS] Writing to block index {block_index:?} at byte_offset={byte_offset:?}");
+        log::trace!("writing to block index {block_index:?} at byte_offset={byte_offset:?}");
 
         buf[byte_offset.range::<INode>()].copy_from_slice(inode.to_bytes().as_slice());
 
@@ -479,7 +480,7 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
     fn new_inode(&mut self, inode: &INode) -> INodeIndex {
         let free = INodeIndex::new(self.inode_bitmap.find_free().unwrap());
 
-        log::trace!("[FS] Writing INode to {free:?} in {:?}", self.inode_bitmap);
+        log::trace!("writing inode to {free:?} in {:?}", self.inode_bitmap);
 
         self.inode_bitmap.set(free.inner());
 
@@ -496,70 +497,64 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
         s.as_bytes() == &bytes[offset..len]
     }
 
-    fn new_dir_entry(&mut self, name: &str, entry_type: Entry) -> Result<INodeIndex, Error> {
-        // Start traversing at root
-        let mut current_index = INodeIndex::new(0);
-        let mut prev_index = INodeIndex::new(0);
+    /// Adds a new `DirEntry` based on the input path.
+    ///
+    /// A `DirEntry` can point to either a file or a directory.
+    ///
+    /// When adding a directory - this should also set the default directories
+    /// '.' and '..'. TODO(mt): this should not happen in here tho.
+    fn new_dir_entry(&mut self, path: &str, entry_type: Entry) -> Result<INodeIndex, Error> {
+        // Path is separated by '/'. Split to get the parts.
+        let mut parts: Vec<_> = path.split('/').filter(|s| !s.is_empty()).collect();
 
-        let mut path: Vec<_> = name.split('/').skip(1).collect();
+        // Start traversing at root index.
+        let mut current = INodeIndex::new(0);
 
-        // The new entry - last part of the path.
-        let new_entry = path.pop().unwrap();
+        let new_entry_name = parts.pop().ok_or(Error::NoNameProvided)?;
 
-        // Walk the path until the target directory to add the `new_entry`.
-        for dir in &path {
-            // Check that this part of the path is valid.
-            let dir_entries = self.read_dir_entry(current_index);
+        // Iterate over parts of the path to walk the filesystem.
+        for part in parts {
+            // Read all `DirEntry` from the current INode.
+            let dir_entries = self.read_dir_entry(current);
+
+            // Find the entry for `part`.
             let next = dir_entries
                 .iter()
-                .find(|e| Self::byte_compare(dir, &e.name))
+                .find(|e| Self::byte_compare(part, &e.name))
                 .ok_or(Error::DirectoryDoesNotExist)?;
 
-            let next_inode = next.inode;
-            let is_directory = self
+            // If the INode that matches the `part` name is not a directory
+            // return an error as we can't go in there.
+            if !self
                 .inode_cache
-                .get(next_inode, &mut self.block_device)
-                .is_directory;
-
-            if !is_directory {
+                .get(next.inode, &mut self.block_device)
+                .is_directory
+            {
                 return Err(Error::NotADirectory);
             }
 
-            prev_index = current_index;
-            current_index = next_inode;
+            // Update the current index.
+            current = next.inode;
         }
 
-        let parent_inode = self.inode_cache.get(current_index, &mut self.block_device);
-
-        if !parent_inode.is_directory {
-            return Err(Error::NotADirectory);
-        }
+        let parent_inode = self.inode_cache.get(current, &mut self.block_device);
 
         if !parent_inode.has_space() {
             return Err(Error::NoSpaceForDirEntry);
         }
 
-        if !self
-            .inode_cache
-            .get(current_index, &mut self.block_device)
-            .is_directory
-        {
-            return Err(Error::NotADirectory);
-        }
-
-        // Check that there is no entry with the same name.
         if self
-            .read_dir_entry(current_index)
+            .read_dir_entry(current)
             .iter()
-            .any(|e| Self::byte_compare(new_entry, &e.name))
+            .any(|e| Self::byte_compare(new_entry_name, &e.name))
         {
             return Err(Error::DuplicatedEntry);
         }
 
         // Create new `INode`.
         let new_inode = match entry_type {
-            Entry::File => INode::empty_file(),
-            Entry::Directory => INode::empty_directory(),
+            Entry::File => INode::new_empty_file(),
+            Entry::Directory => INode::new_empty_directory(),
         };
 
         // Write that `INode` to disk to get the index.
@@ -567,19 +562,16 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
 
         // Create a `DirEntry` with `name` for the new directory and link it
         // to root.
-        let new_directory = DirEntry::new(new_entry.to_string(), inode_index);
+        let new_directory = DirEntry::new(new_entry_name.to_string(), inode_index);
 
-        self.write_dir_entry(new_directory, current_index).unwrap();
+        self.write_dir_entry(new_directory, current).unwrap();
 
         // Create the "." & ".." directories for a new directory.
-        if new_inode.is_directory {
+        if entry_type == Entry::Directory {
             let this = DirEntry::new(String::from("."), inode_index);
-            let parent = DirEntry::new(String::from(".."), prev_index);
+            let parent = DirEntry::new(String::from(".."), current);
             self.write_dir_entry(this, inode_index).unwrap();
             self.write_dir_entry(parent, inode_index).unwrap();
-            log::trace!("Created new directory {name} at inode {inode_index:?}");
-        } else {
-            log::trace!("Created new file {name} at inode {inode_index:?}");
         }
 
         Ok(inode_index)
@@ -606,9 +598,7 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
         // Get the index into the blocks of the `INode`
         let inode_internal_block_index = current_entries / DIR_ENTRY_PER_BLOCK;
 
-        log::trace!(
-            "[FS] Writing DirEntry {entry:?} at block_index={inode_internal_block_index:?}"
-        );
+        log::trace!("writing dir entry {entry:?} at block_index={inode_internal_block_index:?}");
 
         if inode_internal_block_index >= 16 {
             return Err(Error::NoSpaceForDirEntry);
@@ -689,7 +679,7 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
 
     pub(crate) fn create_empty_root(&mut self) {
         // Create the root INode.
-        let root_inode = INode::empty_directory();
+        let root_inode = INode::new_empty_directory();
 
         // Write the node to disk to get the `INodeIndex`.
         let root_inode_index = self.new_inode(&root_inode);
@@ -701,7 +691,7 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
         self.write_dir_entry(this, root_inode_index).unwrap();
         self.write_dir_entry(this_too, root_inode_index).unwrap();
 
-        log::info!("[FS] Filesystem initialized with empty root directory");
+        log::info!("initialized with empty root directory");
     }
 
     fn append_to_file(&mut self, inode_index: INodeIndex, bytes: &[u8]) -> Result<usize, Error> {
@@ -735,7 +725,7 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
             let byte_offset = inode.size % BLOCK_SIZE as u32;
 
             let bytes_to_write = total_bytes.min(BLOCK_SIZE - byte_offset as usize);
-            log::debug!("[FS] Writing {}/{} bytes", bytes_to_write, total_bytes);
+            log::debug!("writing {}/{} bytes", bytes_to_write, total_bytes);
 
             let block_index = self.layout.data_to_block(data_block_index);
 
@@ -847,8 +837,6 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
 
         let root_entries = self.read_dir_entry(INodeIndex::new(0));
 
-        let _ = writeln!(out, "root_entries={root_entries:?}");
-
         for root_entry in root_entries.iter().filter(|e| !e.name().starts_with('.')) {
             inner(self, root_entry, 0, out);
         }
@@ -900,7 +888,7 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
             self.block_device.write_block(block, chunk);
         }
 
-        log::debug!("[FS] Flushed");
+        log::debug!("flushed");
     }
 
     pub fn mkdir(&mut self, path: &str) -> Result<INodeIndex, Error> {
