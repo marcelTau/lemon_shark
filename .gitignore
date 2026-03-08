@@ -1,1 +1,8 @@
 /target
+.gdbinit
+kernel.log
+disk.img
+*.pdf
+/.zed
+qemu.dtb
+device_tree.txt
