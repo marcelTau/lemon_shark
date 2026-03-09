@@ -35,6 +35,8 @@ extern "C" fn _start(_: usize, device_table_addr: usize) -> ! {
 
     device_tree::init(device_table_addr);
 
+    crate::timer::new_time(1);
+
     let virtio_device = virtio2::make_device();
     filesystem::init_with_device(KernelBlockDevice::VirtIO(virtio_device));
 

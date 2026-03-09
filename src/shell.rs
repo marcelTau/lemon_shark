@@ -58,6 +58,7 @@ fn hello() {
 }
 
 fn exit() {
+    crate::filesystem::api::flush();
     crate::exit_qemu(0);
 }
 
