@@ -84,6 +84,7 @@ fn help() {
     println!("  ls                  -- show directories");
     println!("  mkdir <name>        -- creates a new directory");
     println!("  touch <name>        -- creates a new file");
+    println!("  rm <path>           -- removes a file");
     println!("  dumpfs              -- dump of the filesystem");
     println!("  cat <file>          -- print content of file to the console");
     println!("  uptime              -- show for how long the system is running");
@@ -91,6 +92,16 @@ fn help() {
     println!("  tree                -- show a tree view of the filesystem");
     println!("  flush               -- flush filesystem metadata to disk");
     println!("  allocate <n>        -- allocate memory of size n to test the kernel allocator");
+}
+
+fn normalize_root_path(path: &str) -> String {
+    let mut path = String::from_str(path).unwrap();
+
+    if !path.starts_with('/') {
+        path.insert(0, '/');
+    }
+
+    path
 }
 
 fn shell_allocate(size: usize) {
@@ -140,6 +151,7 @@ enum ShellCommand {
     Write { inode_index: usize, text: String },
     Cat { inode_index: usize },
     Touch { name: String },
+    Rm { path: String },
     Tree,
     Flush,
 }
@@ -177,20 +189,16 @@ impl ShellCommand {
             }
             "help" => ShellCommand::Help,
             "mkdir" => {
-                let mut name = String::from_str(parts.get(1).unwrap()).unwrap();
-
-                // TODO(mt): quick hack, if the path doesn't start with a '/'
-                // the prepend it so that it works with the current implementation.
-
-                if !name.starts_with("/") {
-                    name.insert(0, '/');
-                }
-
+                let name = normalize_root_path(parts.get(1)?);
                 ShellCommand::Mkdir { name }
             }
             "touch" => {
                 let name = String::from_str(parts.get(1).unwrap()).unwrap();
                 ShellCommand::Touch { name }
+            }
+            "rm" => {
+                let path = normalize_root_path(parts.get(1)?);
+                ShellCommand::Rm { path }
             }
             "ls" => {
                 let dir = parts
@@ -238,6 +246,11 @@ impl ShellCommand {
             ShellCommand::Touch { name } => {
                 if let Err(e) = crate::filesystem::api::create_file(name) {
                     println!("touch failed: {e:?}");
+                }
+            }
+            ShellCommand::Rm { path } => {
+                if let Err(e) = crate::filesystem::api::remove_dir_entry(path) {
+                    println!("rm failed: {e:?}");
                 }
             }
             ShellCommand::DumpFs => {

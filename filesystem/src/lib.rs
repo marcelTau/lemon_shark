@@ -3,7 +3,10 @@ extern crate alloc;
 
 mod bitmap;
 mod bytereader;
+mod dir_entry;
+mod f2;
 mod filesystem;
+mod inode_cache;
 mod layout;
 
 pub use crate::layout::{BlockIndex, INodeIndex};

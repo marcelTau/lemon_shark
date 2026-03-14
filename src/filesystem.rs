@@ -151,6 +151,10 @@ impl LockedFilesystem {
         self.get().create_file(path)
     }
 
+    pub fn remove_dir_entry(&mut self, path: &str) -> Result<(), Error> {
+        self.get().remove_dir_entry(path)
+    }
+
     fn dump_dir(&mut self, index: u32) {
         self.get().dump_dir(index, &mut UartWriter)
     }
@@ -202,6 +206,10 @@ pub mod api {
 
     pub fn create_file(name: &str) -> Result<INodeIndex, Error> {
         (*FS.lock()).create_file(name)
+    }
+
+    pub fn remove_dir_entry(path: &str) -> Result<(), Error> {
+        (*FS.lock()).remove_dir_entry(path)
     }
 
     pub fn write_to_file(inode_index: usize, text: String) -> Result<usize, Error> {

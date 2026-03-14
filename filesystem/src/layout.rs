@@ -32,7 +32,7 @@ impl ByteOffset {
 }
 
 /// This is the actual index of the INode.
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub struct INodeIndex(pub(crate) u32);
 
 impl INodeIndex {
@@ -61,12 +61,20 @@ impl DataBlockIndex {
         Self(NonZeroU32::new(val))
     }
 
-    pub(crate) fn value(&self) -> Option<u32> {
-        self.0.map(|v| v.get())
+    pub(crate) fn to_block(&self) -> Option<BlockIndex> {
+        self.0.map(|v| BlockIndex(v.get()))
     }
 
-    pub(crate) fn is_none(&self) -> bool {
+    pub(crate) fn bitmap_index(&self, layout: &Layout) -> u32 {
+        self.0.unwrap().get() - layout.data_start as u32
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
         self.0.is_none()
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.0 = None;
     }
 }
 
@@ -152,6 +160,6 @@ impl Layout {
     }
 
     pub(crate) fn data_to_block(&self, data: DataBlockIndex) -> BlockIndex {
-        BlockIndex(data.value().unwrap())
+        data.to_block().unwrap()
     }
 }

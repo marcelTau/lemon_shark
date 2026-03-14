@@ -1,7 +1,7 @@
 use crate::println;
 use core::arch::asm;
 use core::arch::naked_asm;
-use core::sync::atomic::{AtomicBool, Ordering, AtomicUsize};
+use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 /// Atomic that indicates that there was a `TRAP`.
 pub static TRAP: AtomicBool = AtomicBool::new(false);
@@ -157,7 +157,6 @@ extern "C" fn trap_handler_rust() {
     };
 
     let scause = Scause(scause);
-
 
     match scause.reason() {
         ScauseReason::SupervisorTimerInterrupt => {
