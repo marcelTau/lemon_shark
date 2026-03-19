@@ -23,8 +23,9 @@ extern crate alloc;
 use crate::bitmap::Bitmap;
 use crate::bytereader::ByteReader;
 use crate::dir_entry::DirEntry;
+use crate::inode::{INode, INODE_BLOCKS};
 use crate::inode_cache::INodeCache;
-use crate::layout::{DataBlockIndex, Layout};
+use crate::layout::Layout;
 use crate::{BlockIndex, INodeIndex};
 use alloc::string::{String, ToString};
 use alloc::vec;
@@ -105,7 +106,7 @@ impl Buffer {
 
     fn remove_dir_entry(&mut self, start: usize) -> DirEntry {
         let end = start + mem::size_of::<DirEntry>();
-        let entry = DirEntry::from_bytes(&self.buf[start..end]);
+        let entry = self.read_dir_entry_from(start);
         self.buf[start..end].fill(0);
         entry
     }
@@ -113,18 +114,6 @@ impl Buffer {
     fn clear(&mut self) {
         self.buf.fill(0);
     }
-
-    // fn as_dir_entries(&mut self) -> impl Iterator<Item = DirEntry> {
-    //     let mut start = 0;
-    //     core::iter::from_fn(move || {
-    //         for _ in 0..DIR_ENTRY_PER_BLOCK {
-    //             let end = start + mem::size_of::<DirEntry>();
-    //             let entry = DirEntry::from_bytes(&self.buf[start..end]);
-    //             start = end;
-    //             return Some(entry);         }
-    //         None
-    //     })
-    // }
 
     fn inner(&mut self) -> &mut [u8] {
         &mut self.buf[..]
@@ -152,7 +141,7 @@ pub(crate) struct PositionDirEntry {
 
 impl<'dev, Dev: BlockDevice> DirEntryReader<'dev, Dev> {
     pub(crate) fn new(device: &'dev mut Dev, layout: Layout, inode: INode) -> Self {
-        let total = inode.size as usize / mem::size_of::<DirEntry>();
+        let total = unsafe { inode.current_dir_entries() };
         Self {
             device,
             layout,
@@ -168,7 +157,7 @@ impl<'dev, Dev: BlockDevice> DirEntryReader<'dev, Dev> {
 
     fn load_next_block(&mut self) -> bool {
         while self.block_cursor < INODE_BLOCKS {
-            let slot = self.inode.blocks[self.block_cursor];
+            let slot = self.inode.block(self.block_cursor);
             self.block_cursor += 1;
             if !slot.is_empty() {
                 self.device
@@ -202,108 +191,10 @@ impl<'dev, Dev: BlockDevice> Iterator for DirEntryReader<'dev, Dev> {
             entry,
             block_index: self
                 .layout
-                .data_to_block(self.inode.blocks[self.block_cursor - 1]),
+                .data_to_block(self.inode.block(self.block_cursor - 1)),
             byte_offset: (self.buf_pos - 1) * mem::size_of::<DirEntry>(),
             logical_index: self.total - self.remaining - 1,
         })
-    }
-}
-
-/// Hardcoded number of blocks that an INode can hold.
-const INODE_BLOCKS: usize = 16;
-
-/// The `INode` contains metadata about a file.
-///
-/// Memory layout:
-/// `size`          4 bytes
-/// `blocks`        64 bytes
-/// `is_directory`  1 byte
-/// `padding`       3 bytes
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub(crate) struct INode {
-    /// Size of the data in `.blocks`.
-    size: u32,
-
-    /// Used blocks of this `INode`.
-    blocks: [DataBlockIndex; INODE_BLOCKS],
-
-    /// Flag indicating if this is a directory.
-    is_directory: bool,
-}
-
-impl INode {
-    fn new_empty_directory() -> Self {
-        INode {
-            size: 0,
-            is_directory: true,
-            blocks: core::array::from_fn(|_| Default::default()),
-        }
-    }
-
-    fn new_empty_file() -> Self {
-        INode {
-            size: 0,
-            is_directory: false,
-            blocks: core::array::from_fn(|_| Default::default()),
-        }
-    }
-
-    /// SAFETY: This function assumes that the `INode` is a directory and that the
-    /// `size` field is accurate.
-    unsafe fn current_dir_entries(&self) -> usize {
-        assert!(self.is_directory);
-        self.size as usize / mem::size_of::<DirEntry>()
-    }
-
-    fn has_space(&self) -> bool {
-        self.blocks.iter().any(DataBlockIndex::is_empty)
-    }
-
-    fn used_blocks(&self) -> impl Iterator<Item = DataBlockIndex> + '_ {
-        self.blocks.iter().copied().filter(|b| !b.is_empty())
-    }
-
-    fn block_mut(&mut self, block_index: usize) -> Option<&mut DataBlockIndex> {
-        self.blocks.get_mut(block_index)
-    }
-
-    pub(crate) fn from_bytes(bytes: &[u8]) -> Self {
-        let size = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
-        let mut blocks: [DataBlockIndex; 16] = [Default::default(); 16];
-        let mut i = 4;
-
-        (0..16).for_each(|idx| {
-            let value = u32::from_le_bytes([bytes[i], bytes[i + 1], bytes[i + 2], bytes[i + 3]]);
-            blocks[idx] = DataBlockIndex::from_raw_unchecked(value);
-            i += 4;
-        });
-
-        let is_directory = bytes[68] != 0;
-
-        Self {
-            size,
-            is_directory,
-            blocks,
-        }
-    }
-
-    fn to_bytes(self) -> [u8; mem::size_of::<INode>()] {
-        let mut bytes = [0u8; mem::size_of::<INode>()];
-
-        bytes[0..4].copy_from_slice(&self.size.to_le_bytes());
-        let current_offset = 4;
-        for i in 0..16 {
-            let start = current_offset + (i * 4);
-            let value = self.blocks[i]
-                .to_block()
-                .map(|b| b.inner())
-                .unwrap_or_default();
-            bytes[start..start + 4].copy_from_slice(&value.to_le_bytes());
-        }
-        bytes[68] = if self.is_directory { 1 } else { 0 };
-
-        bytes
     }
 }
 
@@ -478,7 +369,7 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
 
         let root_node = INode::from_bytes(&buf[0..mem::size_of::<INode>()]);
 
-        if !root_node.is_directory {
+        if !root_node.is_directory() {
             panic!("Root INode validation failed");
         }
     }
@@ -507,7 +398,6 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
         Some(free)
     }
 
-    // TODO(mt): test this change
     fn byte_compare(s: &str, entry: &str) -> bool {
         if entry.starts_with('/') {
             s == &entry[1..]
@@ -530,7 +420,7 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
                 .ok_or(Error::DirectoryDoesNotExist)?;
 
             // TODO(mt): this check doens't allow files and directories to have the same name. That is fine for now!
-            if !self.lookup_inode(next.inode()).is_directory {
+            if !self.lookup_inode(next.inode()).is_directory() {
                 return Err(Error::NotADirectory);
             }
 
@@ -563,7 +453,7 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
         let resolved = self.resolve_path(path)?;
         let parent_inode = *self.lookup_inode(resolved.parent);
 
-        let num_parent_entries = parent_inode.size as usize / mem::size_of::<DirEntry>();
+        let num_parent_entries = unsafe { parent_inode.current_dir_entries() };
 
         let to_remove = path.rsplit_once('/').map(|(_, n)| n).unwrap_or(path);
 
@@ -579,7 +469,7 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
 
         let last_block_index = self
             .layout
-            .data_to_block(parent_inode.blocks[last_block_slot]);
+            .data_to_block(parent_inode.block(last_block_slot));
 
         let last_entry = modify_block(&mut self.block_device, last_block_index, |buf| {
             buf.remove_dir_entry(last_block_offset)
@@ -597,18 +487,25 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
 
         if is_only_entry_in_last_block {
             // removing the last entry in the directory, remove last block from the parent inode
-            self.data_bitmap
-                .unset(parent_inode.blocks[last_block_slot].bitmap_index(&self.layout));
-            self.lookup_inode_mut(resolved.parent).blocks[last_block_slot].clear();
+            self.data_bitmap.unset(
+                parent_inode
+                    .block(last_block_slot)
+                    .bitmap_index(&self.layout),
+            );
+            self.lookup_inode_mut(resolved.parent)
+                .block_mut(last_block_slot)
+                .unwrap()
+                .clear();
         }
 
-        self.lookup_inode_mut(resolved.parent).size -= mem::size_of::<DirEntry>() as u32;
+        self.lookup_inode_mut(resolved.parent)
+            .shrink(mem::size_of::<DirEntry>());
 
         // Free the blocks of the deleted inode.
         let to_remove_inode = *self.lookup_inode(resolved.basename);
 
         // TODO(mt): right now we only support removing files, not directories as this would require removing all of it's files etc.
-        if to_remove_inode.is_directory {
+        if to_remove_inode.is_directory() {
             return Err(Error::Unsupported);
         }
 
@@ -661,7 +558,7 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
             if !self
                 .inode_cache
                 .get(next.inode(), &mut self.block_device)
-                .is_directory
+                .is_directory()
             {
                 return Err(Error::NotADirectory);
             }
@@ -717,24 +614,19 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
     /// block. If not then we need to allocate a new block and attach this to
     /// the `INode`.
     fn write_dir_entry(&mut self, entry: DirEntry, inode_index: INodeIndex) -> Result<(), Error> {
-        // let mut buf = Buffer::new();
+        const DIR_ENTRY_SIZE: usize = mem::size_of::<DirEntry>();
 
         let inode = self
             .inode_cache
             .get_mut(inode_index, &mut self.block_device);
 
-        if !inode.is_directory {
+        if !inode.is_directory() {
             return Err(Error::NotADirectory);
         }
 
-        let current_entries = unsafe { inode.current_dir_entries() };
+        let slot = inode.write_slot();
 
-        // Get the index into the blocks of the `INode`
-        let inode_internal_block_index = current_entries / DIR_ENTRY_PER_BLOCK;
-
-        log::trace!("writing dir entry {entry:?} at block_index={inode_internal_block_index:?}");
-
-        let Some(block) = inode.block_mut(inode_internal_block_index) else {
+        let Some(block) = slot.block else {
             return Err(Error::INodeBlocksExhausted);
         };
 
@@ -745,19 +637,13 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
             self.data_bitmap.set(free);
         }
 
-        // Get the offset inside of this block
-        let offset_in_block = (current_entries % DIR_ENTRY_PER_BLOCK) * mem::size_of::<DirEntry>();
-
         let block_index = self.layout.data_to_block(*block);
 
         modify_block(&mut self.block_device, block_index, |buf| {
-            buf.write_dir_entry(offset_in_block, entry);
+            buf.write_dir_entry(slot.byte_offset, entry);
         });
 
-        // Increment the `size` by the size of the `DirEntry`.
-        self.inode_cache
-            .get_mut(inode_index, &mut self.block_device)
-            .size += mem::size_of::<DirEntry>() as u32;
+        inode.advance(DIR_ENTRY_SIZE);
 
         Ok(())
     }
@@ -768,12 +654,11 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
         let inode = self.inode_cache.get(inode_index, &mut self.block_device);
 
         // If the `INode` is empty there is nothing to do here.
-        if inode.size == 0 {
+        if inode.size() == 0 {
             return Vec::new();
         }
 
-        // Calculate the number of `DirEntry`s that this `INode` is holding.
-        let max_items = inode.size as usize / mem::size_of::<DirEntry>();
+        let max_items = unsafe { inode.current_dir_entries() };
 
         let mut res = Vec::with_capacity(max_items);
         let mut buf = Buffer::new();
@@ -821,11 +706,11 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
             .inode_cache
             .get_mut(inode_index, &mut self.block_device);
 
-        if inode.is_directory {
+        if inode.is_directory() {
             return Err(Error::NotAFile);
         }
 
-        if inode.size as usize + bytes.len() > 16 * BLOCK_SIZE {
+        if inode.size() as usize + bytes.len() > 16 * BLOCK_SIZE {
             return Err(Error::NoSpaceInFile);
         }
 
@@ -833,28 +718,34 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
         let mut bytes_written = 0;
 
         while total_bytes > 0 {
-            let last_used_block_index = inode.size as usize / BLOCK_SIZE;
+            let slot = inode.write_slot();
 
-            if inode.blocks[last_used_block_index].is_empty() {
+            let Some(block) = slot.block else {
+                return Err(Error::NoSpaceInFile);
+            };
+
+            if block.is_empty() {
                 let free = self.data_bitmap.find_free().ok_or(Error::OutOfMemory)?;
                 let free_block_index = self.layout.data_block(free);
-                inode.blocks[last_used_block_index] = free_block_index;
+                *block = free_block_index;
                 self.data_bitmap.set(free);
             }
 
-            let data_block_index = inode.blocks[last_used_block_index];
-            let byte_offset = inode.size % BLOCK_SIZE as u32;
-
-            let bytes_to_write = total_bytes.min(BLOCK_SIZE - byte_offset as usize);
+            let bytes_to_write = total_bytes.min(slot.capacity);
             log::debug!("writing {}/{} bytes", bytes_to_write, total_bytes);
 
-            let block_index = self.layout.data_to_block(data_block_index);
+            let block_index = self.layout.data_to_block(*block);
 
             modify_block(&mut self.block_device, block_index, |buf| {
-                buf.inner()[byte_offset as usize..byte_offset as usize + bytes_to_write]
-                    .copy_from_slice(&bytes[bytes_written..bytes_written + bytes_to_write]);
+                let write_start = slot.byte_offset;
+                let write_end = write_start + bytes_to_write;
+
+                let read_start = bytes_written;
+                let read_end = read_start + bytes_to_write;
+                buf.inner()[write_start..write_end].copy_from_slice(&bytes[read_start..read_end]);
             });
-            inode.size += bytes_to_write as u32;
+
+            inode.advance(bytes_to_write);
 
             total_bytes -= bytes_to_write;
             bytes_written += bytes_to_write;
@@ -868,13 +759,13 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
             .inode_cache
             .get_mut(inode_index, &mut self.block_device);
 
-        if inode.is_directory {
+        if inode.is_directory() {
             panic!("Can't read from directory");
         }
 
         let mut buf = [0u8; BLOCK_SIZE];
 
-        let mut total_bytes = inode.size as usize;
+        let mut total_bytes = inode.size() as usize;
         let mut string = String::with_capacity(total_bytes);
 
         for block in inode.used_blocks().map(|b| self.layout.data_to_block(b)) {
@@ -899,16 +790,16 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
 
     pub fn dump_dir(&mut self, index: u32, out: &mut impl core::fmt::Write) {
         let inode_index = INodeIndex::new(index);
-        let mut buf = [0u8; BLOCK_SIZE];
+        let mut buf = Buffer::new();
 
         let inode = self.inode_cache.get(inode_index, &mut self.block_device);
-        assert!(inode.is_directory);
+        assert!(inode.is_directory());
 
         for block in inode.used_blocks().map(|b| self.layout.data_to_block(b)) {
-            self.block_device.read_block(block, &mut buf);
+            self.block_device.read_block(block, buf.inner());
 
             for i in 0..DIR_ENTRY_PER_BLOCK {
-                let entry = DirEntry::from_bytes(&buf[i * mem::size_of::<DirEntry>()..]);
+                let entry = buf.read_dir_entry_from(i * mem::size_of::<DirEntry>());
 
                 // only print the directories that have a name
                 if !entry.name().is_empty() {
@@ -930,14 +821,14 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
             if !entries.iter().any(|e| {
                 fs.inode_cache
                     .get(e.inode(), &mut fs.block_device)
-                    .is_directory
+                    .is_directory()
             }) {
                 return;
             }
 
             let inode = fs.inode_cache.get(entry.inode(), &mut fs.block_device);
 
-            if inode.is_directory {
+            if inode.is_directory() {
                 let _ = writeln!(out, "{}{}", " ".repeat(indent as usize), entry.name());
             }
 
@@ -946,7 +837,7 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
                 if !fs
                     .inode_cache
                     .get(entry.inode(), &mut fs.block_device)
-                    .is_directory
+                    .is_directory()
                 {
                     let _ = writeln!(out, "{}{}", " ".repeat(indent as usize + 2), entry.name());
                 }
@@ -1037,6 +928,7 @@ fn modify_block<Dev: BlockDevice, R, F: FnOnce(&mut Buffer) -> R>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::layout::DataBlockIndex;
 
     const RAMDISK_SIZE: usize = 1024 * 1024;
     const MAX_FILE_SIZE: usize = 16 * BLOCK_SIZE;
@@ -1105,8 +997,7 @@ mod tests {
 
     fn first_data_block(inode: &INode) -> Option<u32> {
         inode
-            .blocks
-            .iter()
+            .used_blocks()
             .find_map(|block| block.to_block())
             .map(|b| b.inner())
     }
@@ -1127,7 +1018,7 @@ mod tests {
         let mut fs = make_fs();
 
         let root = inode_copy(&mut fs, INodeIndex::new(0));
-        assert!(root.is_directory);
+        assert!(root.is_directory());
 
         let entries = fs.read_dir_entry(INodeIndex::new(0));
         assert_eq!(entries.len(), 2);
@@ -1159,10 +1050,10 @@ mod tests {
         fs.write_to_file(idx, b"world").unwrap();
 
         let inode = inode_copy(&mut fs, idx);
-        let used_blocks = inode.blocks.iter().filter(|b| !b.is_empty()).count();
+        let used_blocks = inode.used_blocks().count();
 
         assert_eq!(fs.read_file(idx), "hello world");
-        assert_eq!(inode.size, 11);
+        assert_eq!(inode.size(), 11);
         assert_eq!(used_blocks, 1);
     }
 
@@ -1178,7 +1069,7 @@ mod tests {
         fs.write_to_file(idx, &second).unwrap();
 
         let inode = inode_copy(&mut fs, idx);
-        let used_blocks = inode.blocks.iter().filter(|b| !b.is_empty()).count();
+        let used_blocks = inode.used_blocks().count();
         let content = fs.read_file(idx);
 
         assert_eq!(content.len(), BLOCK_SIZE - 1 + 10);
@@ -1199,7 +1090,7 @@ mod tests {
         let after = inode_copy(&mut fs, idx);
 
         assert_eq!(written, 0);
-        assert_eq!(before.size, after.size);
+        assert_eq!(before.size(), after.size());
         assert_eq!(fs.read_file(idx), "abc");
     }
 
@@ -1379,8 +1270,8 @@ mod tests {
 
         let entry_size = core::mem::size_of::<DirEntry>() as u32;
 
-        assert_eq!(after_one.size, initial.size + entry_size);
-        assert_eq!(after_two.size, initial.size + 2 * entry_size);
+        assert_eq!(after_one.size(), initial.size() + entry_size);
+        assert_eq!(after_two.size(), initial.size() + 2 * entry_size);
     }
 
     #[test]
@@ -1393,12 +1284,14 @@ mod tests {
 
         let mut inode = fs.inode_cache.get_mut(cap, &mut fs.block_device);
 
-        inode.size = full_size;
-        for block in inode.blocks.iter_mut().filter(|b| b.is_empty()) {
+        inode.set_size(full_size);
+        for block in inode.blocks_mut().filter(|b| b.is_empty()) {
             *block = DataBlockIndex::from_raw_unchecked(1);
         }
 
-        fs.inode_cache.get_mut(cap, &mut fs.block_device).size = full_size;
+        fs.inode_cache
+            .get_mut(cap, &mut fs.block_device)
+            .set_size(full_size);
 
         let overflow = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             fs.create_file("/cap/overflow")
@@ -1624,8 +1517,8 @@ mod tests {
 
         let mut inode = fs.inode_cache.get_mut(cap, &mut fs.block_device);
 
-        inode.size = full_size;
-        for block in inode.blocks.iter_mut().filter(|b| b.is_empty()) {
+        inode.set_size(full_size);
+        for block in inode.blocks_mut().filter(|b| b.is_empty()) {
             *block = DataBlockIndex::from_raw_unchecked(1);
         }
 
@@ -1951,8 +1844,8 @@ mod tests {
 
         let entry_size = core::mem::size_of::<DirEntry>() as u32;
         assert_eq!(
-            root_after.size,
-            root_before.size - entry_size,
+            root_after.size(),
+            root_before.size() - entry_size,
             "parent inode size should decrease by one DirEntry after remove"
         );
     }

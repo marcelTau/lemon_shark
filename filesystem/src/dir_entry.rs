@@ -1,4 +1,4 @@
-use crate::{INodeIndex, bytereader::ByteReader};
+use crate::{bytereader::ByteReader, INodeIndex};
 
 use core::mem;
 
@@ -7,6 +7,7 @@ use alloc::string::String;
 
 /// The `DirEntry` contains metadata about an entry in a directory such as a
 /// file or another directory which is pointed to by the `INodeIndex`.
+/// NOTE: BLOCK_SIZE must always be a multiple of `DirEntry` to ensure tighly fitted entries.
 #[derive(PartialEq)]
 #[repr(C)]
 pub(crate) struct DirEntry {
