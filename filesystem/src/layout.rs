@@ -65,7 +65,6 @@ impl DataBlockIndex {
         Self(NonZeroU32::new(val))
     }
 
-    // TODO(mt): refactor this / rename
     pub(crate) fn to_block(self) -> Option<BlockIndex> {
         self.0.map(|v| BlockIndex(v.get()))
     }
@@ -164,7 +163,7 @@ impl Layout {
         DataBlockIndex::new(self.data_start as u32, val)
     }
 
-    pub(crate) fn data_to_block(&self, data: DataBlockIndex) -> BlockIndex {
-        data.to_block().unwrap()
-    }
+    // pub(crate) fn data_to_block(&self, data: DataBlockIndex) -> BlockIndex {
+    //     data.to_block().unwrap()
+    // }
 }

@@ -134,7 +134,6 @@ impl Buffer {
 
 pub(crate) struct DirEntryReader<'dev, Dev> {
     device: &'dev mut Dev,
-    layout: Layout,
     inode: INode,
     block_cursor: usize, // index into inode.blocks[]
     buf: Buffer,
@@ -152,11 +151,10 @@ pub(crate) struct PositionDirEntry {
 }
 
 impl<'dev, Dev: BlockDevice> DirEntryReader<'dev, Dev> {
-    pub(crate) fn new(device: &'dev mut Dev, layout: Layout, inode: INode) -> Self {
+    pub(crate) fn new(device: &'dev mut Dev, inode: INode) -> Self {
         let total = unsafe { inode.current_dir_entries() };
         Self {
             device,
-            layout,
             inode,
             block_cursor: 0,
             buf: Buffer::new(),
@@ -171,9 +169,8 @@ impl<'dev, Dev: BlockDevice> DirEntryReader<'dev, Dev> {
         while self.block_cursor < INODE_BLOCKS {
             let slot = self.inode.block(self.block_cursor);
             self.block_cursor += 1;
-            if !slot.is_empty() {
-                self.device
-                    .read_block(self.layout.data_to_block(slot), self.buf.inner());
+            if let Some(block) = slot.to_block() {
+                self.device.read_block(block, self.buf.inner());
                 self.buf_pos = 0;
                 self.buf_len = self.remaining.min(DIR_ENTRY_PER_BLOCK);
                 return true;
@@ -199,14 +196,16 @@ impl<'dev, Dev: BlockDevice> Iterator for DirEntryReader<'dev, Dev> {
             .read_dir_entry_from(self.buf_pos * mem::size_of::<DirEntry>());
         self.buf_pos += 1;
         self.remaining -= 1;
-        Some(PositionDirEntry {
-            entry,
-            block_index: self
-                .layout
-                .data_to_block(self.inode.block(self.block_cursor - 1)),
-            byte_offset: (self.buf_pos - 1) * mem::size_of::<DirEntry>(),
-            logical_index: self.total - self.remaining - 1,
-        })
+
+        self.inode
+            .block(self.block_cursor - 1)
+            .to_block()
+            .map(|block_index| PositionDirEntry {
+                entry,
+                block_index,
+                byte_offset: (self.buf_pos - 1) * mem::size_of::<DirEntry>(),
+                logical_index: self.total - self.remaining - 1,
+            })
     }
 }
 
@@ -469,9 +468,7 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
 
         let to_remove = path.rsplit_once('/').map(|(_, n)| n).unwrap_or(path);
 
-        let layout = self.layout;
-
-        let found = DirEntryReader::new(self.block_device_mut(), layout, parent_inode)
+        let found = DirEntryReader::new(self.block_device_mut(), parent_inode)
             .find(|entry| entry.entry.name() == to_remove)
             .ok_or(Error::NotFound)?;
 
@@ -479,9 +476,10 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
         let last_block_offset =
             (num_parent_entries - 1) % DIR_ENTRY_PER_BLOCK * mem::size_of::<DirEntry>();
 
-        let last_block_index = self
-            .layout
-            .data_to_block(parent_inode.block(last_block_slot));
+        let Some(last_block_index) = parent_inode.block(last_block_slot).to_block() else {
+            log::error!("Could not find last_block_index. This should never happen.");
+            return Err(Error::NotFound);
+        };
 
         let last_entry = modify_block(&mut self.block_device, last_block_index, |buf| {
             buf.remove_dir_entry(last_block_offset)
@@ -523,7 +521,7 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
 
         // Free the blocks of the deleted inode.
         for block in to_remove_inode.used_blocks() {
-            let block_index = self.layout.data_to_block(block);
+            let block_index = block.to_block().expect("Checked in `used_blocks`");
             modify_block(&mut self.block_device, block_index, |buf| buf.clear());
             self.data_bitmap.unset(block.bitmap_index(&self.layout));
         }
@@ -649,7 +647,7 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
             self.data_bitmap.set(free);
         }
 
-        let block_index = self.layout.data_to_block(*block);
+        let block_index = block.to_block().expect("Is set by block above");
 
         modify_block(&mut self.block_device, block_index, |buf| {
             buf.write_dir_entry(slot.byte_offset, entry);
@@ -676,7 +674,7 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
         let mut buf = Buffer::new();
 
         // Loop and read all `DirEntry`s into `res`.
-        for block_index in inode.used_blocks().map(|b| self.layout.data_to_block(b)) {
+        for block_index in inode.used_blocks().flat_map(|b| b.to_block()) {
             self.block_device.read_block(block_index, buf.inner());
 
             let items_in_block = (max_items - res.len()).min(DIR_ENTRY_PER_BLOCK);
@@ -750,7 +748,9 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
             let bytes_to_write = total_bytes.min(slot.capacity);
             log::debug!("writing {}/{} bytes", bytes_to_write, total_bytes);
 
-            let block_index = self.layout.data_to_block(*block);
+            let block_index = block
+                .to_block()
+                .expect("Is set by the block above in this function");
 
             modify_block(&mut self.block_device, block_index, |buf| {
                 let write_start = slot.byte_offset;
