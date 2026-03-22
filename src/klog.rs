@@ -77,9 +77,9 @@ impl log::Log for KernelLogger {
             _ => ("", ""),
         };
         // Level is at most 5 chars (DEBUG). Label padded to 8 chars for alignment.
-        let _ = write!(
+        let _ = writeln!(
             buf,
-            "{}[{:<5} {:<8}] {}{}\n",
+            "{}[{:<5} {:<8}] {}{}",
             pre,
             record.level(),
             label,

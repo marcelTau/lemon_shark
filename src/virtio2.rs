@@ -8,7 +8,6 @@ extern crate alloc;
 use alloc::alloc::{Layout, alloc_zeroed, dealloc};
 
 use crate::filesystem::BlockIndex;
-use crate::println;
 use core::ptr::NonNull;
 use spin::Mutex;
 

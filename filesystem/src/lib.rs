@@ -10,7 +10,7 @@ mod inode_cache;
 mod layout;
 
 pub use crate::layout::{BlockIndex, INodeIndex};
-pub use filesystem::{BlockDevice, Error, Filesystem, BLOCK_SIZE};
+pub use filesystem::{BLOCK_SIZE, BlockDevice, Error, Filesystem};
 
 pub(crate) use filesystem::{INODES_PER_BLOCK, MAX_INODES};
 pub(crate) use inode::INode;

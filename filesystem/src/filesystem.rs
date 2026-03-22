@@ -23,7 +23,7 @@ extern crate alloc;
 use crate::bitmap::Bitmap;
 use crate::bytereader::ByteReader;
 use crate::dir_entry::DirEntry;
-use crate::inode::{INode, INODE_BLOCKS};
+use crate::inode::{INODE_BLOCKS, INode};
 use crate::inode_cache::INodeCache;
 use crate::layout::Layout;
 use crate::{BlockIndex, INodeIndex};
@@ -102,6 +102,18 @@ impl Buffer {
     fn write_dir_entry(&mut self, start: usize, entry: DirEntry) {
         let end = start + mem::size_of::<DirEntry>();
         self.buf[start..end].copy_from_slice(&entry.to_bytes());
+    }
+
+    fn dir_entries(&self) -> impl Iterator<Item = DirEntry> {
+        let mut i = 0;
+        core::iter::from_fn(move || {
+            if i + mem::size_of::<DirEntry>() > BLOCK_SIZE {
+                return None;
+            }
+            let entry = self.read_dir_entry_from(i);
+            i += mem::size_of::<DirEntry>();
+            Some(entry)
+        })
     }
 
     fn remove_dir_entry(&mut self, start: usize) -> DirEntry {
@@ -691,6 +703,8 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
             .new_inode(&root_inode)
             .expect("There is space when creating the root");
 
+        log::error!("Root inode index: {root_inode_index:?}");
+
         // Create the default directories in the root directory.
         let this = DirEntry::new(String::from("."), root_inode_index);
         let this_too = DirEntry::new(String::from(".."), root_inode_index);
@@ -701,10 +715,12 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
         log::info!("initialized with empty root directory");
     }
 
-    fn append_to_file(&mut self, inode_index: INodeIndex, bytes: &[u8]) -> Result<usize, Error> {
+    fn append_to_file(&mut self, path: &str, bytes: &[u8]) -> Result<usize, Error> {
+        let resolved = self.resolve_path(path)?;
+
         let inode = self
             .inode_cache
-            .get_mut(inode_index, &mut self.block_device);
+            .get_mut(resolved.basename, &mut self.block_device);
 
         if inode.is_directory() {
             return Err(Error::NotAFile);
@@ -754,30 +770,32 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
         Ok(bytes_written)
     }
 
-    pub fn read_file(&mut self, inode_index: INodeIndex) -> String {
+    pub fn read_file(&mut self, path: &str) -> Result<String, Error> {
+        let resolved = self.resolve_path(path)?;
+
         let inode = self
             .inode_cache
-            .get_mut(inode_index, &mut self.block_device);
+            .get_mut(resolved.basename, &mut self.block_device);
 
         if inode.is_directory() {
-            panic!("Can't read from directory");
+            return Err(Error::NotAFile);
         }
 
-        let mut buf = [0u8; BLOCK_SIZE];
+        let mut buf = Buffer::new();
 
         let mut total_bytes = inode.size() as usize;
         let mut string = String::with_capacity(total_bytes);
 
-        for block in inode.used_blocks().map(|b| self.layout.data_to_block(b)) {
-            self.block_device.read_block(block, &mut buf);
+        for block in inode.used_blocks().map(|b| b.to_block().unwrap()) {
+            self.block_device.read_block(block, buf.inner());
 
             let valid_bytes = total_bytes.min(BLOCK_SIZE);
             total_bytes -= valid_bytes;
 
-            string.push_str(str::from_utf8(&buf[..valid_bytes]).unwrap());
+            string.push_str(str::from_utf8(&buf.inner()[..valid_bytes]).unwrap());
         }
 
-        string
+        Ok(string)
     }
 
     /// Writes the superblock to block_index 0
@@ -788,25 +806,36 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
         });
     }
 
-    pub fn dump_dir(&mut self, index: u32, out: &mut impl core::fmt::Write) {
-        let inode_index = INodeIndex::new(index);
+    pub fn dump_dir(&mut self, path: &str, out: &mut impl core::fmt::Write) -> Result<(), Error> {
+        log::info!("`ls` for \"{path}\"");
+
+        let inode_index = match path {
+            "/" => INodeIndex::root(),
+            _ => self.resolve_path(path)?.basename,
+        };
+
+        log::info!("Found inode_index={inode_index:?} for path=\"{path}\"");
+
         let mut buf = Buffer::new();
 
-        let inode = self.inode_cache.get(inode_index, &mut self.block_device);
-        assert!(inode.is_directory());
+        let inode = *self.lookup_inode(inode_index);
+        log::info!("Found inode={inode:?} for path=\"{path}\"");
 
-        for block in inode.used_blocks().map(|b| self.layout.data_to_block(b)) {
+        if !inode.is_directory() {
+            return Err(Error::NotADirectory);
+        }
+
+        for block in inode.used_blocks().map(|b| b.to_block().unwrap()) {
             self.block_device.read_block(block, buf.inner());
 
-            for i in 0..DIR_ENTRY_PER_BLOCK {
-                let entry = buf.read_dir_entry_from(i * mem::size_of::<DirEntry>());
-
-                // only print the directories that have a name
-                if !entry.name().is_empty() {
-                    let _ = writeln!(out, "\t{entry:?}");
-                }
-            }
+            buf.dir_entries()
+                .filter(|e| !e.name().is_empty())
+                .for_each(|e| {
+                    writeln!(out, "\t{e:?}").unwrap();
+                });
         }
+
+        Ok(())
     }
 
     pub fn tree(&mut self, out: &mut impl core::fmt::Write) {
@@ -908,8 +937,8 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
         self.new_dir_entry(path, Entry::File)
     }
 
-    pub fn write_to_file(&mut self, inode_index: INodeIndex, bytes: &[u8]) -> Result<usize, Error> {
-        self.append_to_file(inode_index, bytes)
+    pub fn write_to_file(&mut self, path: &str, bytes: &[u8]) -> Result<usize, Error> {
+        self.append_to_file(path, bytes)
     }
 }
 

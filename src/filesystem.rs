@@ -155,20 +155,20 @@ impl LockedFilesystem {
         self.get().remove_dir_entry(path)
     }
 
-    fn dump_dir(&mut self, index: u32) {
-        self.get().dump_dir(index, &mut UartWriter)
+    fn dump_dir(&mut self, path: &str) -> Result<(), Error> {
+        self.get().dump_dir(path, &mut UartWriter)
     }
 
     fn dump(&mut self) {
         self.get().block_device_mut().dump_non_empty_pages()
     }
 
-    fn write_to_file(&mut self, inode_index: INodeIndex, bytes: &[u8]) -> Result<usize, Error> {
-        self.get().write_to_file(inode_index, bytes)
+    fn write_to_file(&mut self, path: &str, bytes: &[u8]) -> Result<usize, Error> {
+        self.get().write_to_file(path, bytes)
     }
 
-    pub(crate) fn read_file(&mut self, inode_index: INodeIndex) -> String {
-        self.get().read_file(inode_index)
+    pub(crate) fn read_file(&mut self, path: &str) -> Result<String, Error> {
+        self.get().read_file(path)
     }
 
     fn reset(&mut self) {
@@ -196,8 +196,8 @@ pub mod api {
         (*FS.lock()).dump();
     }
 
-    pub fn dump_dir(index: u32) {
-        (*FS.lock()).dump_dir(index);
+    pub fn dump_dir(path: &str) -> Result<(), Error> {
+        (*FS.lock()).dump_dir(path)
     }
 
     pub fn mkdir(name: &str) -> Result<INodeIndex, Error> {
@@ -212,12 +212,12 @@ pub mod api {
         (*FS.lock()).remove_dir_entry(path)
     }
 
-    pub fn write_to_file(inode_index: usize, text: String) -> Result<usize, Error> {
-        (*FS.lock()).write_to_file(INodeIndex::new(inode_index as u32), text.as_bytes())
+    pub fn write_to_file(path: &str, text: String) -> Result<usize, Error> {
+        (*FS.lock()).write_to_file(path, text.as_bytes())
     }
 
-    pub fn read_file(inode_index: usize) -> String {
-        (*FS.lock()).read_file(INodeIndex::new(inode_index as u32))
+    pub fn read_file(path: &str) -> Result<String, Error> {
+        (*FS.lock()).read_file(path)
     }
 
     pub fn reset() {

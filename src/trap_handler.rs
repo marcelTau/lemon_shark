@@ -1,7 +1,6 @@
-use crate::println;
 use core::arch::asm;
 use core::arch::naked_asm;
-use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, Ordering};
 
 /// Atomic that indicates that there was a `TRAP`.
 pub static TRAP: AtomicBool = AtomicBool::new(false);

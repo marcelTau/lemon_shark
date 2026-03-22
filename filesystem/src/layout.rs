@@ -1,7 +1,7 @@
 use core::mem;
 use core::num::NonZeroU32;
 
-use crate::{INode, BLOCK_SIZE, INODES_PER_BLOCK, MAX_INODES};
+use crate::{BLOCK_SIZE, INODES_PER_BLOCK, INode, MAX_INODES};
 
 /// An Index into the blocks used for the block device.
 #[derive(Debug, Clone, Copy)]
@@ -43,6 +43,10 @@ impl INodeIndex {
     pub fn inner(&self) -> u32 {
         self.0
     }
+
+    pub fn root() -> Self {
+        INodeIndex(0)
+    }
 }
 
 /// `DataBlockIndex` is an index into the blocks of the ramdisk but is restricted to
@@ -62,7 +66,7 @@ impl DataBlockIndex {
     }
 
     // TODO(mt): refactor this / rename
-    pub(crate) fn to_block(&self) -> Option<BlockIndex> {
+    pub(crate) fn to_block(self) -> Option<BlockIndex> {
         self.0.map(|v| BlockIndex(v.get()))
     }
 

@@ -1,4 +1,4 @@
-use crate::{dir_entry::DirEntry, layout::DataBlockIndex, BLOCK_SIZE};
+use crate::{BLOCK_SIZE, dir_entry::DirEntry, layout::DataBlockIndex};
 
 use core::mem;
 

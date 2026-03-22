@@ -1,4 +1,4 @@
-use crate::{bytereader::ByteReader, INodeIndex};
+use crate::{INodeIndex, bytereader::ByteReader};
 
 use core::mem;
 
@@ -41,7 +41,7 @@ impl DirEntry {
     }
 
     pub(crate) fn name(&self) -> String {
-        let len = self.name.iter().take_while(|&&b| b != 0).count();
+        let len = self.name.iter().filter(|&&b| b != 0).count();
         String::from_utf8(self.name[..len].to_vec()).unwrap_or_default()
     }
 

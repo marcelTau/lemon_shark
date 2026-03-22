@@ -145,12 +145,12 @@ enum ShellCommand {
     Help,
     Allocate { size: usize },
     Bench { n: usize, size: usize },
-    Ls { dir: u32 }, // INodeIndex for now
+    Ls { path: String }, // INodeIndex for now
     Mkdir { name: String },
     DumpFs,
-    Write { inode_index: usize, text: String },
-    Cat { inode_index: usize },
-    Touch { name: String },
+    Write { path: String, text: String },
+    Cat { path: String },
+    Touch { path: String },
     Rm { path: String },
     Tree,
     Flush,
@@ -194,18 +194,15 @@ impl ShellCommand {
             }
             "touch" => {
                 let name = String::from_str(parts.get(1).unwrap()).unwrap();
-                ShellCommand::Touch { name }
+                ShellCommand::Touch { path: name }
             }
             "rm" => {
                 let path = normalize_root_path(parts.get(1)?);
                 ShellCommand::Rm { path }
             }
             "ls" => {
-                let dir = parts
-                    .get(1)
-                    .and_then(|secs| secs.parse().ok())
-                    .unwrap_or_default();
-                ShellCommand::Ls { dir }
+                let dir = normalize_root_path(parts.get(1)?);
+                ShellCommand::Ls { path: dir }
             }
             "dumpfs" => ShellCommand::DumpFs,
             "flush" => ShellCommand::Flush,
@@ -213,13 +210,13 @@ impl ShellCommand {
                 let (inode_index, rest) = parts.split_at(2);
 
                 ShellCommand::Write {
-                    inode_index: inode_index[1].parse().unwrap(),
+                    path: inode_index[1].parse().unwrap(),
                     text: rest.join(" "),
                 }
             }
             "cat" => {
-                let inode_index = parts.get(1).and_then(|n| n.parse().ok())?;
-                ShellCommand::Cat { inode_index }
+                let path = normalize_root_path(parts.get(1)?);
+                ShellCommand::Cat { path }
             }
             _ => return None,
         };
@@ -237,13 +234,17 @@ impl ShellCommand {
             ShellCommand::Bench { n, size } => benchmark_allocator(*n, *size),
             Self::Allocate { size } => shell_allocate(*size),
             ShellCommand::Timer { secs } => crate::timer::new_time(*secs),
-            ShellCommand::Ls { dir } => crate::filesystem::api::dump_dir(*dir),
+            ShellCommand::Ls { path: dir } => {
+                if let Err(e) = crate::filesystem::api::dump_dir(dir) {
+                    println!("ls failed: {e:?}");
+                }
+            }
             ShellCommand::Mkdir { name } => {
                 if let Err(e) = crate::filesystem::api::mkdir(name) {
                     println!("mkdir failed: {e:?}");
                 }
             }
-            ShellCommand::Touch { name } => {
+            ShellCommand::Touch { path: name } => {
                 if let Err(e) = crate::filesystem::api::create_file(name) {
                     println!("touch failed: {e:?}");
                 }
@@ -256,16 +257,16 @@ impl ShellCommand {
             ShellCommand::DumpFs => {
                 crate::filesystem::api::dump();
             }
-            ShellCommand::Cat { inode_index } => {
-                let output = crate::filesystem::api::read_file(*inode_index);
-                println!("{output}");
-            }
+            ShellCommand::Cat { path } => match crate::filesystem::api::read_file(path) {
+                Ok(output) => println!("{output}"),
+                Err(e) => println!("cat failed: {e:?}"),
+            },
             ShellCommand::Uptime => {
                 let time = crate::timer::uptime();
                 println!("Currently running for {time}s");
             }
-            ShellCommand::Write { inode_index, text } => {
-                if let Err(e) = crate::filesystem::api::write_to_file(*inode_index, text.clone()) {
+            ShellCommand::Write { path, text } => {
+                if let Err(e) = crate::filesystem::api::write_to_file(path, text.clone()) {
                     println!("Writing to file failed: {e}");
                 }
             }
