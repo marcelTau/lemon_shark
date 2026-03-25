@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "filesystem", "allocator"]
+members = [".", "filesystem", "allocator", "mkfs"]
 resolver = "2"
 
 [package]

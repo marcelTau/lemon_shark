@@ -11,7 +11,7 @@ ARGS := -machine virt \
 		-display none \
 		-chardev stdio,id=con,signal=off \
 		-serial chardev:con \
-		-drive file=disk.img,if=none,format=raw,id=hd0 \
+		-drive file=lemonfs.img,if=none,format=raw,id=hd0 \
 		-device virtio-blk-device,drive=hd0 \
 		-chardev file,id=log,path=kernel.log \
 		-device virtio-serial-device \
@@ -23,8 +23,9 @@ all: run
 debug: ARGS += -s -S
 debug: run
 
-reset_disk:
-	rm disk.img && truncate -s 16M disk.img	
+fs:
+	rm lemonfs.img && cargo run -p mkfs --target x86_64-unknown-linux-gnu
+
 
 run:
 	@cargo build

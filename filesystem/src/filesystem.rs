@@ -73,6 +73,8 @@ pub enum Error {
     INodeBlocksExhausted,
     INodeBitmapExhausted,
     Unsupported,
+    InvalidRootNode,
+    InvalidSuperblock,
 }
 
 impl core::error::Error for Error {}
@@ -272,82 +274,38 @@ pub struct Filesystem<D> {
 }
 
 impl<Dev: BlockDevice> Filesystem<Dev> {
-    /// Reads the superblock from block_index 0
-    fn read_superblock(block_device: &mut Dev) -> (SuperBlock, bool) {
+    /// Reads the superblock from block_index 0 if the filesystem has the right format.
+    fn read_superblock(block_device: &mut Dev) -> Option<SuperBlock> {
         let mut buf = [0u8; BLOCK_SIZE];
         block_device.read_block(BlockIndex::from_raw(0), &mut buf);
         let sb = SuperBlock::from_bytes(&buf[0..mem::size_of::<SuperBlock>()]);
 
-        match sb.magic {
-            0 => {
-                log::info!("empty disk, creating new superblock");
-                let total_blocks = block_device.total_blocks() as u32;
-                (
-                    SuperBlock {
-                        magic: MAGIC,
-                        block_size: BLOCK_SIZE as u32,
-                        total_blocks,
-                    },
-                    false,
-                )
-            }
-            MAGIC => {
-                log::info!("found superblock on disk: {sb:?}");
-                (sb, true)
-            }
-            _ => panic!("Disk has wrong format"),
-        }
+        (sb.magic == MAGIC).then_some(sb)
     }
 
-    pub fn new(mut block_device: Dev) -> Self {
-        let (sb, is_initialized) = Self::read_superblock(&mut block_device);
-
+    pub fn new(mut block_device: Dev) -> Result<Self, Error> {
+        let sb = Self::read_superblock(&mut block_device).ok_or(Error::InvalidSuperblock)?;
         let layout = Layout::new(sb.total_blocks);
 
         log::info!("generated layout: {layout:?}");
-        log::info!(
-            "Inode bitmap size = {}",
-            BLOCK_SIZE * layout.inode_bitmap_blocks
-        );
 
-        let mut inode_bitmap_raw = vec![0u8; BLOCK_SIZE * layout.inode_bitmap_blocks];
+        let mut read_bitmap = |blocks: usize, bitmap_start: usize| -> Vec<u8> {
+            let mut raw = vec![0u8; BLOCK_SIZE * blocks];
+            for i in 0..blocks {
+                let start = i * BLOCK_SIZE;
+                let end = start + BLOCK_SIZE;
+                let block_index = BlockIndex::from_raw((bitmap_start + i) as u32);
+                block_device.read_block(block_index, &mut raw[start..end]);
+            }
 
-        for i in 0..layout.inode_bitmap_blocks {
-            let start = i * BLOCK_SIZE;
-            block_device.read_block(
-                BlockIndex::from_raw((layout.inode_bitmap_start + i) as u32),
-                &mut inode_bitmap_raw[start..start + BLOCK_SIZE],
-            );
-        }
-
-        log::info!(
-            "Data bitmap size = {}",
-            BLOCK_SIZE * layout.data_bitmap_blocks
-        );
-
-        let mut data_bitmap_raw = vec![0u8; BLOCK_SIZE * layout.data_bitmap_blocks];
-
-        for i in 0..layout.data_bitmap_blocks {
-            let start = i * BLOCK_SIZE;
-            block_device.read_block(
-                BlockIndex::from_raw((layout.data_bitmap_start + i) as u32),
-                &mut data_bitmap_raw[start..start + BLOCK_SIZE],
-            );
-        }
-
-        let (inode_bitmap, data_bitmap) = if is_initialized {
-            log::info!("Reading inode_bitmap");
-            let inode_bitmap = Bitmap::from_bytes(&inode_bitmap_raw);
-            log::info!("Reading data_bitmap");
-            let data_bitmap = Bitmap::from_bytes(&data_bitmap_raw);
-
-            (inode_bitmap, data_bitmap)
-        } else {
-            (
-                Bitmap::new((BLOCK_SIZE * layout.inode_bitmap_blocks) as u32),
-                Bitmap::new((BLOCK_SIZE * layout.data_bitmap_blocks) as u32),
-            )
+            raw
         };
+
+        let inode_bitmap_raw = read_bitmap(layout.inode_bitmap_blocks, layout.inode_bitmap_start);
+        let data_bitmap_raw = read_bitmap(layout.data_bitmap_blocks, layout.data_bitmap_start);
+
+        let inode_bitmap = Bitmap::from_bytes(&inode_bitmap_raw);
+        let data_bitmap = Bitmap::from_bytes(&data_bitmap_raw);
 
         let mut fs = Self {
             inode_bitmap,
@@ -357,13 +315,39 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
             layout,
         };
 
-        if !is_initialized {
-            fs.create_empty_root();
-        } else {
-            fs.validate_root_inode();
-        }
+        fs.validate_root_inode()?;
 
-        fs
+        Ok(fs)
+    }
+
+    /// Formats a blank block device as a LemonShark filesystem.
+    ///
+    /// Writes the superblock, initialises empty bitmaps, creates the root
+    /// directory inode with `.` and `..` entries, and flushes everything to
+    /// disk. The returned `Filesystem` is ready for use (or can simply be
+    /// dropped if the caller only needed the formatted image).
+    pub fn format(mut block_device: Dev) {
+        let total_blocks = block_device.total_blocks() as u32;
+        let layout = Layout::new(total_blocks);
+
+        // Each bitmap block stores: 4-byte word_count header + word_count*4
+        // bytes of bit data.  To guarantee the serialised form fits within the
+        // allocated blocks we size the bitmap so that header + data == exactly
+        // N * BLOCK_SIZE bytes:
+        //   usable_words = (N * BLOCK_SIZE - 4) / 4   →   usable_bits = usable_words * 32
+        let inode_bitmap_bits = ((layout.inode_bitmap_blocks * BLOCK_SIZE - 4) / 4 * 32) as u32;
+        let data_bitmap_bits = ((layout.data_bitmap_blocks * BLOCK_SIZE - 4) / 4 * 32) as u32;
+
+        let mut fs = Self {
+            block_device,
+            inode_bitmap: Bitmap::new(inode_bitmap_bits),
+            data_bitmap: Bitmap::new(data_bitmap_bits),
+            inode_cache: INodeCache::new(layout),
+            layout,
+        };
+
+        fs.create_empty_root();
+        fs.flush();
     }
 
     /// Returns a mutable reference to the underlying block device.
@@ -372,7 +356,7 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
         &mut self.block_device
     }
 
-    fn validate_root_inode(&mut self) {
+    fn validate_root_inode(&mut self) -> Result<(), Error> {
         let mut buf = [0u8; BLOCK_SIZE];
 
         let (index, _) = self.layout.inode_to_block(INodeIndex::new(0));
@@ -381,8 +365,10 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
         let root_node = INode::from_bytes(&buf[0..mem::size_of::<INode>()]);
 
         if !root_node.is_directory() {
-            panic!("Root INode validation failed");
+            return Err(Error::InvalidRootNode);
         }
+
+        Ok(())
     }
 
     /// Writes an `INode` to disk.
@@ -692,7 +678,7 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
         res
     }
 
-    pub(crate) fn create_empty_root(&mut self) {
+    pub fn create_empty_root(&mut self) {
         // Create the root INode.
         let root_inode = INode::new_empty_directory();
 

@@ -246,7 +246,13 @@ pub fn init_with_device(dev: KernelBlockDevice) {
         return;
     }
 
-    let fs = Filesystem::new(dev);
+    let fs = match Filesystem::new(dev) {
+        Ok(fs) => fs,
+        Err(e) => {
+            log::error!("Could not initialize filesystem: {e}");
+            return;
+        }
+    };
 
     (*FS.lock()).init(fs);
 
