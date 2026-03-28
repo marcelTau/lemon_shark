@@ -58,14 +58,13 @@ pub trait BlockDevice {
 /// Filesystem Errors
 #[derive(Debug, PartialEq)]
 pub enum Error {
-    DuplicatedEntry,
-    DirectoryDoesNotExist,
     NotADirectory,
     NotAFile,
     NoSpaceInFile,
     OutOfMemory,
 
     // -- new errors --
+    DuplicatedEntry,
     NoNameProvided,
     NameTooLong,
     NotFound,
@@ -414,7 +413,7 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
             let next = dir_entries
                 .iter()
                 .find(|e| Self::byte_compare(part, &e.name()))
-                .ok_or(Error::DirectoryDoesNotExist)?;
+                .ok_or(Error::NotFound)?;
 
             // TODO(mt): this check doens't allow files and directories to have the same name. That is fine for now!
             if !self.lookup_inode(next.inode()).is_directory() {
@@ -547,7 +546,7 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
             let next = dir_entries
                 .iter()
                 .find(|e| Self::byte_compare(part, &e.name()))
-                .ok_or(Error::DirectoryDoesNotExist)?;
+                .ok_or(Error::NotFound)?;
 
             // If the INode that matches the `part` name is not a directory
             // return an error as we can't go in there.
@@ -944,18 +943,26 @@ fn modify_block<Dev: BlockDevice, R, F: FnOnce(&mut Buffer) -> R>(
 mod tests {
     use super::*;
     use crate::layout::DataBlockIndex;
+    use std::cell::RefCell;
+    use std::rc::Rc;
 
     const RAMDISK_SIZE: usize = 1024 * 1024;
     const MAX_FILE_SIZE: usize = 16 * BLOCK_SIZE;
 
     struct Ramdisk {
-        data: Vec<u8>,
+        data: Rc<RefCell<Vec<u8>>>,
     }
 
     impl Ramdisk {
         fn new() -> Self {
             Self {
-                data: vec![0; RAMDISK_SIZE],
+                data: Rc::new(RefCell::new(vec![0; RAMDISK_SIZE])),
+            }
+        }
+
+        fn share(&self) -> Self {
+            Self {
+                data: Rc::clone(&self.data),
             }
         }
     }
@@ -963,31 +970,32 @@ mod tests {
     impl BlockDevice for Ramdisk {
         fn read_block(&mut self, block_idx: BlockIndex, buf: &mut [u8]) {
             assert_eq!(buf.len(), BLOCK_SIZE);
-
+            let data = self.data.borrow();
             let start = block_idx.inner() as usize * BLOCK_SIZE;
             let end = start + BLOCK_SIZE;
-
-            assert!(end <= self.data.len());
-            buf.copy_from_slice(&self.data[start..end]);
+            assert!(end <= data.len());
+            buf.copy_from_slice(&data[start..end]);
         }
 
         fn write_block(&mut self, block_idx: BlockIndex, data: &[u8]) {
             assert_eq!(data.len(), BLOCK_SIZE);
-
+            let mut d = self.data.borrow_mut();
             let start = block_idx.inner() as usize * BLOCK_SIZE;
             let end = start + BLOCK_SIZE;
-
-            assert!(end <= self.data.len());
-            self.data[start..end].copy_from_slice(data);
+            assert!(end <= d.len());
+            d[start..end].copy_from_slice(data);
         }
 
         fn total_blocks(&mut self) -> usize {
-            self.data.len() / BLOCK_SIZE
+            self.data.borrow().len() / BLOCK_SIZE
         }
     }
 
     fn make_fs() -> Filesystem<Ramdisk> {
-        Filesystem::new(Ramdisk::new())
+        let ramdisk = Ramdisk::new();
+        let shared = ramdisk.share();
+        Filesystem::format(ramdisk);
+        Filesystem::new(shared).expect("failed to mount freshly formatted filesystem")
     }
 
     fn inode_copy(fs: &mut Filesystem<Ramdisk>, idx: INodeIndex) -> INode {
@@ -996,7 +1004,7 @@ mod tests {
 
     fn remount(fs: Filesystem<Ramdisk>) -> Filesystem<Ramdisk> {
         let Filesystem { block_device, .. } = fs;
-        Filesystem::new(block_device)
+        Filesystem::new(block_device).expect("remount failed")
     }
 
     fn find_entry_inode(
@@ -1049,11 +1057,11 @@ mod tests {
     fn create_file_and_read_back_small_content() {
         let mut fs = make_fs();
 
-        let idx = fs.create_file("/hello.txt").unwrap();
-        let written = fs.write_to_file(idx, b"hello filesystem").unwrap();
+        fs.create_file("/hello.txt").unwrap();
+        let written = fs.write_to_file("/hello.txt", b"hello filesystem").unwrap();
 
         assert_eq!(written, 16);
-        assert_eq!(fs.read_file(idx), "hello filesystem");
+        assert_eq!(fs.read_file("/hello.txt").unwrap(), "hello filesystem");
     }
 
     #[test]
@@ -1061,13 +1069,13 @@ mod tests {
         let mut fs = make_fs();
 
         let idx = fs.create_file("/append.txt").unwrap();
-        fs.write_to_file(idx, b"hello ").unwrap();
-        fs.write_to_file(idx, b"world").unwrap();
+        fs.write_to_file("/append.txt", b"hello ").unwrap();
+        fs.write_to_file("/append.txt", b"world").unwrap();
 
         let inode = inode_copy(&mut fs, idx);
         let used_blocks = inode.used_blocks().count();
 
-        assert_eq!(fs.read_file(idx), "hello world");
+        assert_eq!(fs.read_file("/append.txt").unwrap(), "hello world");
         assert_eq!(inode.size(), 11);
         assert_eq!(used_blocks, 1);
     }
@@ -1080,12 +1088,12 @@ mod tests {
         let first = vec![b'A'; BLOCK_SIZE - 1];
         let second = vec![b'B'; 10];
 
-        fs.write_to_file(idx, &first).unwrap();
-        fs.write_to_file(idx, &second).unwrap();
+        fs.write_to_file("/boundary.txt", &first).unwrap();
+        fs.write_to_file("/boundary.txt", &second).unwrap();
 
         let inode = inode_copy(&mut fs, idx);
         let used_blocks = inode.used_blocks().count();
-        let content = fs.read_file(idx);
+        let content = fs.read_file("/boundary.txt").unwrap();
 
         assert_eq!(content.len(), BLOCK_SIZE - 1 + 10);
         assert!(content.starts_with(&"A".repeat(BLOCK_SIZE - 1)));
@@ -1098,27 +1106,27 @@ mod tests {
         let mut fs = make_fs();
 
         let idx = fs.create_file("/noop.txt").unwrap();
-        fs.write_to_file(idx, b"abc").unwrap();
+        fs.write_to_file("/noop.txt", b"abc").unwrap();
         let before = inode_copy(&mut fs, idx);
 
-        let written = fs.write_to_file(idx, b"").unwrap();
+        let written = fs.write_to_file("/noop.txt", b"").unwrap();
         let after = inode_copy(&mut fs, idx);
 
         assert_eq!(written, 0);
         assert_eq!(before.size(), after.size());
-        assert_eq!(fs.read_file(idx), "abc");
+        assert_eq!(fs.read_file("/noop.txt").unwrap(), "abc");
     }
 
     #[test]
     fn write_max_file_size_then_overflow() {
         let mut fs = make_fs();
 
-        let idx = fs.create_file("/max.txt").unwrap();
+        fs.create_file("/max.txt").unwrap();
         let content = vec![b'Z'; MAX_FILE_SIZE];
 
-        let written = fs.write_to_file(idx, &content).unwrap();
-        let overflow = fs.write_to_file(idx, b"!");
-        let read_back = fs.read_file(idx);
+        let written = fs.write_to_file("/max.txt", &content).unwrap();
+        let overflow = fs.write_to_file("/max.txt", b"!");
+        let read_back = fs.read_file("/max.txt").unwrap();
 
         assert_eq!(written, MAX_FILE_SIZE);
         assert_eq!(overflow.err(), Some(Error::NoSpaceInFile));
@@ -1130,28 +1138,27 @@ mod tests {
     fn writing_to_file() {
         let mut fs = make_fs();
 
-        let index = fs.create_file("/text.txt").expect("Unable to create file");
+        fs.create_file("/text.txt").expect("Unable to create file");
         let content = "A".repeat(511);
         let bytes_written = fs
-            .write_to_file(index, content.as_bytes())
+            .write_to_file("/text.txt", content.as_bytes())
             .expect("Failed to write to file");
         assert_eq!(bytes_written, 511);
 
         let failed = fs.create_file("/text.txt");
         assert_eq!(failed.err(), Some(Error::DuplicatedEntry));
 
-        let other_file = fs
-            .create_file("/other-text.txt")
+        fs.create_file("/other-text.txt")
             .expect("Unable to create file");
         let content = "B".repeat(513);
         let bytes_written = fs
-            .write_to_file(other_file, content.as_bytes())
+            .write_to_file("/other-text.txt", content.as_bytes())
             .expect("Failed to write to file");
         assert_eq!(bytes_written, 513);
 
         let content = "C".repeat(5);
         let bytes_written = fs
-            .write_to_file(index, content.as_bytes())
+            .write_to_file("/text.txt", content.as_bytes())
             .expect("Failed to write to file");
         assert_eq!(bytes_written, 5);
     }
@@ -1215,8 +1222,8 @@ mod tests {
         let file_res = fs.create_file("/missing/file.txt");
         let dir_res = fs.mkdir("/missing/subdir");
 
-        assert_eq!(file_res.err(), Some(Error::DirectoryDoesNotExist));
-        assert_eq!(dir_res.err(), Some(Error::DirectoryDoesNotExist));
+        assert_eq!(file_res.err(), Some(Error::NotFound));
+        assert_eq!(dir_res.err(), Some(Error::NotFound));
     }
 
     #[test]
@@ -1401,7 +1408,7 @@ mod tests {
 
         fs.mkdir("/dir").unwrap();
         let file = fs.create_file("/dir/notes.txt").unwrap();
-        fs.write_to_file(file, b"persisted").unwrap();
+        fs.write_to_file("/dir/notes.txt", b"persisted").unwrap();
         fs.flush();
 
         let mut fs = remount(fs);
@@ -1409,7 +1416,7 @@ mod tests {
         let note = find_entry_inode(&mut fs, dir, "notes.txt").expect("notes missing");
 
         assert_eq!(note.inner(), file.inner());
-        assert_eq!(fs.read_file(file), "persisted");
+        assert_eq!(fs.read_file("/dir/notes.txt").unwrap(), "persisted");
     }
 
     #[test]
@@ -1417,13 +1424,13 @@ mod tests {
         let mut fs = make_fs();
 
         let first = fs.create_file("/one").unwrap();
-        fs.write_to_file(first, b"hello").unwrap();
+        fs.write_to_file("/one", b"hello").unwrap();
         let first_block = first_data_block(&inode_copy(&mut fs, first)).unwrap();
         fs.flush();
 
         let mut fs = remount(fs);
         let second = fs.create_file("/two").unwrap();
-        fs.write_to_file(second, b"world").unwrap();
+        fs.write_to_file("/two", b"world").unwrap();
 
         let second_block = first_data_block(&inode_copy(&mut fs, second)).unwrap();
 
@@ -1436,14 +1443,14 @@ mod tests {
         let mut fs = make_fs();
 
         fs.mkdir("/idempotent").unwrap();
-        let file = fs.create_file("/idempotent/file.txt").unwrap();
-        fs.write_to_file(file, b"hello").unwrap();
+        fs.create_file("/idempotent/file.txt").unwrap();
+        fs.write_to_file("/idempotent/file.txt", b"hello").unwrap();
 
         fs.flush();
-        let after_first_flush = fs.block_device.data.clone();
+        let after_first_flush = fs.block_device.data.borrow().clone();
 
         fs.flush();
-        let after_second_flush = fs.block_device.data.clone();
+        let after_second_flush = fs.block_device.data.borrow().clone();
 
         assert_eq!(after_first_flush, after_second_flush);
     }
@@ -1452,13 +1459,13 @@ mod tests {
     fn remount_multiple_times_preserves_state() {
         let mut fs = make_fs();
 
-        let idx = fs.create_file("/loop.txt").unwrap();
-        fs.write_to_file(idx, b"stable").unwrap();
+        fs.create_file("/loop.txt").unwrap();
+        fs.write_to_file("/loop.txt", b"stable").unwrap();
         fs.flush();
 
         for _ in 0..3 {
             fs = remount(fs);
-            assert_eq!(fs.read_file(idx), "stable");
+            assert_eq!(fs.read_file("/loop.txt").unwrap(), "stable");
             fs.flush();
         }
     }
@@ -1467,17 +1474,17 @@ mod tests {
     fn append_after_remount_preserves_and_extends() {
         let mut fs = make_fs();
 
-        let idx = fs.create_file("/append-remount.txt").unwrap();
-        fs.write_to_file(idx, b"abc").unwrap();
+        fs.create_file("/append-remount.txt").unwrap();
+        fs.write_to_file("/append-remount.txt", b"abc").unwrap();
         fs.flush();
 
         let mut fs = remount(fs);
-        fs.write_to_file(idx, b"def").unwrap();
-        assert_eq!(fs.read_file(idx), "abcdef");
+        fs.write_to_file("/append-remount.txt", b"def").unwrap();
+        assert_eq!(fs.read_file("/append-remount.txt").unwrap(), "abcdef");
         fs.flush();
 
         let mut fs = remount(fs);
-        assert_eq!(fs.read_file(idx), "abcdef");
+        assert_eq!(fs.read_file("/append-remount.txt").unwrap(), "abcdef");
     }
 
     #[test]
@@ -1504,7 +1511,7 @@ mod tests {
     fn data_block_exhaustion_returns_error_not_panic() {
         let mut fs = make_fs();
 
-        let file = fs.create_file("/data-oom.txt").unwrap();
+        fs.create_file("/data-oom.txt").unwrap();
 
         let bits = bitmap_capacity_bits(&fs.data_bitmap);
         for idx in 0..bits {
@@ -1512,7 +1519,7 @@ mod tests {
         }
 
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            fs.write_to_file(file, b"x")
+            fs.write_to_file("/data-oom.txt", b"x")
         }));
 
         assert!(
@@ -1595,8 +1602,8 @@ mod tests {
         let first = fs.create_file("/first.txt").unwrap();
         let second = fs.create_file("/second.txt").unwrap();
 
-        fs.write_to_file(first, b"aaa").unwrap();
-        fs.write_to_file(second, b"bbb").unwrap();
+        fs.write_to_file("/first.txt", b"aaa").unwrap();
+        fs.write_to_file("/second.txt", b"bbb").unwrap();
 
         let first_block = first_data_block(&inode_copy(&mut fs, first)).unwrap();
         let second_block = first_data_block(&inode_copy(&mut fs, second)).unwrap();
@@ -1609,10 +1616,10 @@ mod tests {
         let mut fs = make_fs();
 
         let content = "A".repeat(MAX_FILE_SIZE);
-        let index = fs.create_file("/test.txt").unwrap();
-        fs.write_to_file(index, content.as_bytes()).unwrap();
+        fs.create_file("/test.txt").unwrap();
+        fs.write_to_file("/test.txt", content.as_bytes()).unwrap();
 
-        let res = fs.write_to_file(index, b"overflow");
+        let res = fs.write_to_file("/test.txt", b"overflow");
         assert_eq!(res.err(), Some(Error::NoSpaceInFile));
     }
 
@@ -1629,8 +1636,8 @@ mod tests {
     fn writing_to_directory_returns_error() {
         let mut fs = make_fs();
 
-        let index = fs.mkdir("/test").unwrap();
-        let res = fs.write_to_file(index, b"xd");
+        fs.mkdir("/test").unwrap();
+        let res = fs.write_to_file("/test", b"xd");
         assert_eq!(res.err(), Some(Error::NotAFile));
     }
 
@@ -1707,8 +1714,8 @@ mod tests {
     fn remove_frees_data_blocks() {
         let mut fs = make_fs();
 
-        let idx = fs.create_file("/data.txt").unwrap();
-        fs.write_to_file(idx, b"some content that occupies a block")
+        fs.create_file("/data.txt").unwrap();
+        fs.write_to_file("/data.txt", b"some content that occupies a block")
             .unwrap();
 
         let before = bitmap_set_count(&fs.data_bitmap);
@@ -1762,7 +1769,7 @@ mod tests {
         let mut fs = make_fs();
 
         let res = fs.remove_dir_entry("/nope/file.txt");
-        assert_eq!(res.err(), Some(Error::DirectoryDoesNotExist));
+        assert_eq!(res.err(), Some(Error::NotFound));
     }
 
     #[test]
