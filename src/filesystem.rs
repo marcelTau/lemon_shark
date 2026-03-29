@@ -6,7 +6,7 @@ use alloc::string::String;
 use core::sync::atomic::{AtomicBool, Ordering};
 use filesystem::{BlockDevice, Filesystem};
 
-pub use filesystem::{BLOCK_SIZE, BlockIndex, Error, INodeIndex};
+pub use filesystem::{BlockIndex, Error, INodeIndex, BLOCK_SIZE};
 
 /// The concrete block device used by the kernel, wrapping either the in-memory
 /// ramdisk or the VirtIO persistent storage.
@@ -124,7 +124,6 @@ impl KernelBlockDevice {
 }
 
 static FS: spin::Mutex<LockedFilesystem> = spin::Mutex::new(LockedFilesystem::new());
-static FS_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
 struct LockedFilesystem {
     inner: Option<Filesystem<KernelBlockDevice>>,
@@ -133,6 +132,10 @@ struct LockedFilesystem {
 impl LockedFilesystem {
     pub const fn new() -> Self {
         Self { inner: None }
+    }
+
+    fn is_some(&self) -> bool {
+        self.inner.is_some()
     }
 
     fn get(&mut self) -> &mut Filesystem<KernelBlockDevice> {
@@ -236,12 +239,7 @@ pub mod api {
 /// Initializes the Filesystem by reading the superblock or defaulting it
 /// if it doesn't exist.
 pub fn init_with_device(dev: KernelBlockDevice) {
-    // Guard against re-initializing the Filesystem by setting the atomic
-    // flag.
-    if FS_INITIALIZED
-        .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
-        .is_err()
-    {
+    if FS.lock().is_some() {
         log::info!("not initializing the filesystem again");
         return;
     }

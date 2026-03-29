@@ -11,7 +11,7 @@ use alloc::string::String;
 /// in Section 5.2
 #[derive(Debug)]
 #[repr(C)]
-pub struct FdtHeader {
+struct FdtHeader {
     magic: u32,
     pub totalsize: u32,
     off_dt_struct: u32,
@@ -45,7 +45,6 @@ pub struct FdtHeader {
             no-map = []
         };
     };
-
 */
 
 impl FdtHeader {
@@ -75,7 +74,6 @@ impl FdtHeader {
     }
 }
 
-// TODO(mt): make it impossible to re-call init and break things.
 static SYSINFO: spin::Mutex<LockedSystemInfo> = spin::Mutex::new(LockedSystemInfo::new());
 
 struct LockedSystemInfo {
@@ -83,17 +81,21 @@ struct LockedSystemInfo {
 }
 
 impl LockedSystemInfo {
-    pub const fn new() -> Self {
+    const fn new() -> Self {
         Self {
             inner: UnsafeCell::new(None),
         }
     }
 
-    pub fn init(&self, fdt_addr: usize) {
+    fn init(&self, fdt_addr: usize) {
         unsafe { (*self.inner.get()).replace(SystemInfo::new(fdt_addr)) };
     }
 
-    pub fn inner(&self) -> &SystemInfo {
+    fn is_some(&self) -> bool {
+        unsafe { (*self.inner.get()).is_some() }
+    }
+
+    fn inner(&self) -> &SystemInfo {
         unsafe { (*self.inner.get()).as_ref().unwrap() }
     }
 }
@@ -120,6 +122,12 @@ impl SystemInfo {
 
         let cpu = fdt.cpus().next().unwrap();
 
+        // TODO(mt): Typically QEMU only has a single memory region. Also this region is placed
+        // after the reserved-memory which means we can use all of it as RAM and divide it up into
+        // pages. Technically again we should get the values from the device_tree and use them in
+        // the page frame allocator. But testing locally has confirmed, that the `_kernel_end`
+        // symbol comes after the reserved-memory and the .bss section as defined in the linker
+        // script, hence this should be safe to use right now.
         let mut total_memory = 0;
         for region in fdt.memory().regions() {
             if let Some(size) = region.size {
@@ -172,6 +180,11 @@ impl SystemInfo {
 }
 
 pub fn init(fdt_addr: usize) {
+    if SYSINFO.lock().is_some() {
+        log::error!("Tried to re-initialize the system info struct");
+        return;
+    }
+
     (*SYSINFO.lock()).init(fdt_addr);
     log::info!("initialized");
 }
@@ -199,15 +212,14 @@ pub fn virtio_mmio_devices(fdt_addr: usize) -> alloc::vec::Vec<usize> {
     let fdt = fdt::Fdt::new(slice).expect("Could not read device tree");
 
     let mut devices = alloc::vec::Vec::new();
+
     for node in fdt.all_nodes() {
-        if let Some(compatible) = node.compatible() {
-            if compatible.all().any(|s| s == "virtio,mmio") {
-                if let Some(mut reg) = node.reg() {
-                    if let Some(region) = reg.next() {
-                        devices.push(region.starting_address as usize);
-                    }
-                }
-            }
+        if let Some(compatible) = node.compatible()
+            && compatible.all().any(|s| s == "virtio,mmio")
+            && let Some(mut reg) = node.reg()
+            && let Some(region) = reg.next()
+        {
+            devices.push(region.starting_address as usize);
         }
     }
     devices
