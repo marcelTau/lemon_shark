@@ -20,8 +20,7 @@
 //! 10-end  Data
 
 extern crate alloc;
-use crate::bitmap::Bitmap;
-use crate::bytereader::ByteReader;
+use crate::bytereader::{ByteReader, ByteWriter, DiskFormat};
 use crate::dir_entry::DirEntry;
 use crate::inode::{INODE_BLOCKS, INode};
 use crate::inode_cache::INodeCache;
@@ -30,6 +29,7 @@ use crate::{BlockIndex, INodeIndex};
 use alloc::string::{String, ToString};
 use alloc::vec;
 use alloc::vec::Vec;
+use bitmap::Bitmap;
 use core::mem;
 
 /// Number of `DirEntry` per block.
@@ -95,37 +95,12 @@ impl Buffer {
         }
     }
 
-    fn read_dir_entry_from(&self, start: usize) -> DirEntry {
-        let end = start + mem::size_of::<DirEntry>();
-        DirEntry::from_bytes(&self.buf[start..end])
-    }
-
-    fn write_dir_entry(&mut self, start: usize, entry: DirEntry) {
-        let end = start + mem::size_of::<DirEntry>();
-        self.buf[start..end].copy_from_slice(&entry.to_bytes());
-    }
-
-    fn dir_entries(&self) -> impl Iterator<Item = DirEntry> {
-        let mut i = 0;
-        core::iter::from_fn(move || {
-            if i + mem::size_of::<DirEntry>() > BLOCK_SIZE {
-                return None;
-            }
-            let entry = self.read_dir_entry_from(i);
-            i += mem::size_of::<DirEntry>();
-            Some(entry)
-        })
-    }
-
-    fn remove_dir_entry(&mut self, start: usize) -> DirEntry {
-        let end = start + mem::size_of::<DirEntry>();
-        let entry = self.read_dir_entry_from(start);
-        self.buf[start..end].fill(0);
-        entry
-    }
-
     fn clear(&mut self) {
         self.buf.fill(0);
+    }
+
+    fn as_bytes(&self) -> &[u8] {
+        &self.buf
     }
 
     fn inner(&mut self) -> &mut [u8] {
@@ -192,9 +167,9 @@ impl<'dev, Dev: BlockDevice> Iterator for DirEntryReader<'dev, Dev> {
             return None;
         }
 
-        let entry = self
-            .buf
-            .read_dir_entry_from(self.buf_pos * mem::size_of::<DirEntry>());
+        let offset = self.buf_pos * mem::size_of::<DirEntry>();
+        let entry =
+            DirEntry::from_bytes(&self.buf.as_bytes()[offset..offset + mem::size_of::<DirEntry>()]);
         self.buf_pos += 1;
         self.remaining -= 1;
 
@@ -226,29 +201,19 @@ pub(crate) struct SuperBlock {
     total_blocks: u32,
 }
 
-impl SuperBlock {
-    fn from_bytes(bytes: &[u8]) -> Self {
-        let mut reader = ByteReader::new(bytes);
-
-        let magic = reader.read_u64();
-        let block_size = reader.read_u32();
-        let total_blocks = reader.read_u32();
-
-        Self {
-            magic,
-            block_size,
-            total_blocks,
-        }
+impl DiskFormat for SuperBlock {
+    fn write_to<'a>(&self, writer: &'a mut ByteWriter) {
+        writer.write_u64(self.magic);
+        writer.write_u32(self.block_size);
+        writer.write_u32(self.total_blocks);
     }
 
-    fn to_bytes(&self) -> [u8; mem::size_of::<SuperBlock>()] {
-        let mut bytes = [0u8; mem::size_of::<SuperBlock>()];
-
-        bytes[0..8].copy_from_slice(&self.magic.to_le_bytes());
-        bytes[8..12].copy_from_slice(&self.block_size.to_le_bytes());
-        bytes[12..16].copy_from_slice(&self.total_blocks.to_le_bytes());
-
-        bytes
+    fn read_from<'a>(reader: &'a mut ByteReader) -> Self {
+        Self {
+            magic: reader.read_u64(),
+            block_size: reader.read_u32(),
+            total_blocks: reader.read_u32(),
+        }
     }
 }
 
@@ -277,7 +242,7 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
     fn read_superblock(block_device: &mut Dev) -> Option<SuperBlock> {
         let mut buf = [0u8; BLOCK_SIZE];
         block_device.read_block(BlockIndex::from_raw(0), &mut buf);
-        let sb = SuperBlock::from_bytes(&buf[0..mem::size_of::<SuperBlock>()]);
+        let sb = SuperBlock::read_from(&mut ByteReader::new(&buf[0..mem::size_of::<SuperBlock>()]));
 
         (sb.magic == MAGIC).then_some(sb)
     }
@@ -303,8 +268,8 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
         let inode_bitmap_raw = read_bitmap(layout.inode_bitmap_blocks, layout.inode_bitmap_start);
         let data_bitmap_raw = read_bitmap(layout.data_bitmap_blocks, layout.data_bitmap_start);
 
-        let inode_bitmap = Bitmap::from_bytes(&inode_bitmap_raw);
-        let data_bitmap = Bitmap::from_bytes(&data_bitmap_raw);
+        let inode_bitmap = Bitmap::read_from(&mut ByteReader::new(&inode_bitmap_raw));
+        let data_bitmap = Bitmap::read_from(&mut ByteReader::new(&data_bitmap_raw));
 
         let mut fs = Self {
             inode_bitmap,
@@ -358,10 +323,10 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
     fn validate_root_inode(&mut self) -> Result<(), Error> {
         let mut buf = [0u8; BLOCK_SIZE];
 
-        let (index, _) = self.layout.inode_to_block(INodeIndex::new(0));
+        let (index, offset) = self.layout.inode_to_block(INodeIndex::new(0));
         self.block_device.read_block(index, &mut buf);
 
-        let root_node = INode::from_bytes(&buf[0..mem::size_of::<INode>()]);
+        let root_node = INode::read_from(&mut ByteReader::new(&buf[offset.range::<INode>()]));
 
         if !root_node.is_directory() {
             return Err(Error::InvalidRootNode);
@@ -375,7 +340,8 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
         let (block_index, byte_offset) = self.layout.inode_to_block(inode_index);
 
         modify_block(&mut self.block_device, block_index, |buf| {
-            buf.inner()[byte_offset.range::<INode>()].copy_from_slice(inode.to_bytes().as_slice())
+            let mut writer = ByteWriter::new(&mut buf.inner()[byte_offset.range::<INode>()]);
+            inode.write_to(&mut writer);
         });
     }
 
@@ -467,13 +433,19 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
         };
 
         let last_entry = modify_block(&mut self.block_device, last_block_index, |buf| {
-            buf.remove_dir_entry(last_block_offset)
+            let end = last_block_offset + mem::size_of::<DirEntry>();
+            let entry = DirEntry::from_bytes(&buf.as_bytes()[last_block_offset..end]);
+            buf.inner()[last_block_offset..end].fill(0);
+            entry
         });
 
         if found.logical_index != num_parent_entries - 1 {
             // swap-remove the entry
             modify_block(&mut self.block_device, found.block_index, |buf| {
-                buf.write_dir_entry(found.byte_offset, last_entry)
+                last_entry.to_bytes(
+                    &mut buf.inner()
+                        [found.byte_offset..found.byte_offset + mem::size_of::<DirEntry>()],
+                );
             });
         }
 
@@ -635,7 +607,9 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
         let block_index = block.to_block().expect("Is set by block above");
 
         modify_block(&mut self.block_device, block_index, |buf| {
-            buf.write_dir_entry(slot.byte_offset, entry);
+            entry.to_bytes(
+                &mut buf.inner()[slot.byte_offset..slot.byte_offset + mem::size_of::<DirEntry>()],
+            );
         });
 
         inode.advance(DIR_ENTRY_SIZE);
@@ -666,7 +640,9 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
 
             for i in 0..items_in_block {
                 let start = i * mem::size_of::<DirEntry>();
-                res.push(buf.read_dir_entry_from(start));
+                res.push(DirEntry::from_bytes(
+                    &buf.as_bytes()[start..start + mem::size_of::<DirEntry>()],
+                ));
             }
 
             if res.len() == max_items {
@@ -787,7 +763,9 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
     fn write_superblock(&mut self, superblock: &SuperBlock) {
         modify_block(&mut self.block_device, BlockIndex::from_raw(0), |buf| {
             buf.clear();
-            buf.inner()[0..mem::size_of::<SuperBlock>()].copy_from_slice(&superblock.to_bytes());
+            superblock.write_to(&mut ByteWriter::new(
+                &mut buf.inner()[0..mem::size_of::<SuperBlock>()],
+            ));
         });
     }
 
@@ -813,7 +791,9 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
         for block in inode.used_blocks().map(|b| b.to_block().unwrap()) {
             self.block_device.read_block(block, buf.inner());
 
-            buf.dir_entries()
+            buf.as_bytes()
+                .chunks_exact(mem::size_of::<DirEntry>())
+                .map(DirEntry::from_bytes)
                 .filter(|e| !e.name().is_empty())
                 .for_each(|e| {
                     writeln!(out, "\t{e:?}").unwrap();
@@ -884,32 +864,31 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
 
         self.write_superblock(&superblock);
 
-        // Write the INodeBitmap to disk
-        let mut inode_bitmap_vec = self.inode_bitmap.to_bytes();
+        let mut write_bitmap = |blocks: usize, start_block: usize, bitmap: &Bitmap| {
+            let total_bytes = blocks * BLOCK_SIZE;
 
-        if !inode_bitmap_vec.len().is_multiple_of(BLOCK_SIZE) {
-            inode_bitmap_vec
-                .extend([0u8].repeat(BLOCK_SIZE - (inode_bitmap_vec.len() % BLOCK_SIZE)));
-        }
+            let mut buf = vec![0u8; total_bytes];
+            let mut writer = ByteWriter::new(&mut buf);
 
-        let start_block = self.layout.inode_bitmap_start as u32;
+            bitmap.write_to(&mut writer);
 
-        for (i, chunk) in inode_bitmap_vec[..].chunks(BLOCK_SIZE).enumerate() {
-            let block = BlockIndex::from_raw(start_block + i as u32);
-            self.block_device.write_block(block, chunk);
-        }
+            for (i, chunk) in buf[..].chunks(BLOCK_SIZE).enumerate() {
+                let block = BlockIndex::from_raw((start_block + i) as u32);
+                self.block_device.write_block(block, chunk);
+            }
+        };
 
-        // Write the DataBitmap to disk
-        let mut data_bitmap_vec = self.data_bitmap.to_bytes();
-        if !data_bitmap_vec.len().is_multiple_of(BLOCK_SIZE) {
-            data_bitmap_vec.extend([0u8].repeat(BLOCK_SIZE - (data_bitmap_vec.len() % BLOCK_SIZE)));
-        }
-        let start_block = self.layout.data_bitmap_start as u32;
+        write_bitmap(
+            self.layout.inode_bitmap_blocks,
+            self.layout.inode_bitmap_start,
+            &self.inode_bitmap,
+        );
 
-        for (i, chunk) in data_bitmap_vec[..].chunks(BLOCK_SIZE).enumerate() {
-            let block = BlockIndex::from_raw(start_block + i as u32);
-            self.block_device.write_block(block, chunk);
-        }
+        write_bitmap(
+            self.layout.data_bitmap_blocks,
+            self.layout.data_bitmap_start,
+            &self.data_bitmap,
+        );
 
         log::debug!("flushed");
     }
@@ -1026,9 +1005,7 @@ mod tests {
     }
 
     fn bitmap_capacity_bits(bitmap: &Bitmap) -> u32 {
-        let bytes = bitmap.to_bytes();
-        let words = u32::from_le_bytes(bytes[0..4].try_into().unwrap());
-        words * 32
+        bitmap.words().len() as u32 * 32
     }
 
     fn bitmap_set_count(bitmap: &Bitmap) -> u32 {
@@ -1885,5 +1862,62 @@ mod tests {
             new_idx.inner(),
             "re-added entry should be able to reuse the freed inode index"
         );
+    }
+
+    fn bitmap_round_trip(bitmap: &Bitmap) -> Bitmap {
+        let words = bitmap.words();
+        let total_bytes = 4 + words.len() * 4;
+        let mut buf = vec![0u8; total_bytes];
+        let mut writer = ByteWriter::new(&mut buf);
+        bitmap.write_to(&mut writer);
+        Bitmap::read_from(&mut ByteReader::new(&buf))
+    }
+
+    #[test]
+    fn bitmap_round_trip_with_bits_set() {
+        let mut bitmap = Bitmap::new(128);
+        for i in [0, 12, 88, 127, 66] {
+            bitmap.set(i);
+        }
+        assert_eq!(bitmap_round_trip(&bitmap), bitmap);
+    }
+
+    #[test]
+    fn bitmap_round_trip_empty() {
+        let bitmap = Bitmap::new(64);
+        assert_eq!(bitmap_round_trip(&bitmap), bitmap);
+    }
+
+    #[test]
+    fn bitmap_round_trip_all_set() {
+        let mut bitmap = Bitmap::new(64);
+        for i in 0..64 {
+            bitmap.set(i);
+        }
+        assert_eq!(bitmap_round_trip(&bitmap), bitmap);
+    }
+
+    #[test]
+    fn bitmap_round_trip_large_buffer() {
+        let mut bitmap = Bitmap::new(128);
+        bitmap.set(5);
+        bitmap.set(99);
+        let words = bitmap.words();
+        let total_bytes = 4 + words.len() * 4;
+        let mut block = [0u8; 512];
+        let mut writer = ByteWriter::new(&mut block[..total_bytes]);
+        bitmap.write_to(&mut writer);
+        assert_eq!(Bitmap::read_from(&mut ByteReader::new(&block)), bitmap);
+    }
+
+    #[test]
+    fn bitmap_serialized_size() {
+        let bitmap = Bitmap::new(128); // 4 words
+        let words = bitmap.words();
+        let total_bytes = 4 + words.len() * 4;
+        let mut buf = vec![0u8; total_bytes];
+        let mut writer = ByteWriter::new(&mut buf);
+        bitmap.write_to(&mut writer);
+        assert_eq!(buf.len(), 4 + 4 * 4);
     }
 }

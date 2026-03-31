@@ -16,6 +16,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "812e12b5285cc515a9c72a5c1d3b6d46a19dac5acfef5265968c166106e31dd3"
 
 [[package]]
+name = "bitmap"
+version = "0.1.0"
+dependencies = [
+ "log",
+]
+
+[[package]]
 name = "embedded-io"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -42,6 +49,7 @@ checksum = "784a4df722dc6267a04af36895398f59d21d07dce47232adf31ec0ff2fa45e67"
 name = "filesystem"
 version = "0.1.0"
 dependencies = [
+ "bitmap",
  "log",
 ]
 
@@ -50,6 +58,7 @@ name = "lemon_shark"
 version = "0.1.0"
 dependencies = [
  "allocator",
+ "bitmap",
  "fdt",
  "filesystem",
  "log",

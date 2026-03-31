@@ -1,4 +1,4 @@
-use crate::{BLOCK_SIZE, dir_entry::DirEntry, layout::DataBlockIndex};
+use crate::{BLOCK_SIZE, bytereader::DiskFormat, dir_entry::DirEntry, layout::DataBlockIndex};
 
 use core::mem;
 
@@ -106,45 +106,37 @@ impl INode {
         self.blocks.get_mut(block_index)
     }
 
-    pub(crate) fn from_bytes(bytes: &[u8]) -> Self {
-        let size = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
-        let mut blocks: [DataBlockIndex; 16] = [Default::default(); 16];
-        let mut i = 4;
+    pub(crate) fn is_directory(&self) -> bool {
+        self.is_directory
+    }
+}
 
-        (0..16).for_each(|idx| {
-            let value = u32::from_le_bytes([bytes[i], bytes[i + 1], bytes[i + 2], bytes[i + 3]]);
-            blocks[idx] = DataBlockIndex::from_raw_unchecked(value);
-            i += 4;
+impl DiskFormat for INode {
+    fn write_to<'a>(&self, writer: &'a mut crate::bytereader::ByteWriter) {
+        writer.write_u32(self.size);
+
+        for block in self.blocks.iter().map(|b| b.to_block().map(|b| b.inner())) {
+            writer.write_u32(block.unwrap_or_default());
+        }
+
+        writer.write_u8(if self.is_directory { 1 } else { 0 });
+    }
+
+    fn read_from<'a>(reader: &'a mut crate::bytereader::ByteReader) -> Self {
+        let size = reader.read_u32();
+        let mut blocks: [DataBlockIndex; 16] = [Default::default(); 16];
+
+        (0..16).for_each(|i| {
+            let val = reader.read_u32();
+            blocks[i] = DataBlockIndex::from_raw_unchecked(val);
         });
 
-        let is_directory = bytes[68] != 0;
+        let is_directory = reader.read_u8() != 0;
 
         Self {
             size,
-            is_directory,
             blocks,
+            is_directory,
         }
-    }
-
-    pub(crate) fn to_bytes(self) -> [u8; mem::size_of::<INode>()] {
-        let mut bytes = [0u8; mem::size_of::<INode>()];
-
-        bytes[0..4].copy_from_slice(&self.size.to_le_bytes());
-        let current_offset = 4;
-        for i in 0..16 {
-            let start = current_offset + (i * 4);
-            let value = self.blocks[i]
-                .to_block()
-                .map(|b| b.inner())
-                .unwrap_or_default();
-            bytes[start..start + 4].copy_from_slice(&value.to_le_bytes());
-        }
-        bytes[68] = if self.is_directory { 1 } else { 0 };
-
-        bytes
-    }
-
-    pub(crate) fn is_directory(&self) -> bool {
-        self.is_directory
     }
 }

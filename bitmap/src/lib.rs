@@ -1,55 +1,35 @@
-use crate::bytereader::ByteReader;
+#![cfg_attr(not(test), no_std)]
 extern crate alloc;
+use alloc::vec;
 use alloc::vec::Vec;
 
+/// A simple bitmap implemented ontop of u32's.
 #[derive(Debug, PartialEq, Clone, Default)]
-pub(crate) struct Bitmap {
+pub struct Bitmap {
     arr: Vec<u32>,
 }
 
 impl Bitmap {
-    pub(crate) fn new(bits: u32) -> Self {
+    pub fn new(bits: u32) -> Self {
         assert!(
             bits.is_multiple_of(32),
             "`find_free` breaks if it's not a multiple of 32"
         );
         let word_count = bits.div_ceil(32);
         Self {
-            arr: alloc::vec![0; word_count as usize],
+            arr: vec![0; word_count as usize],
         }
     }
 
-    pub(crate) fn from_bytes(bytes: &[u8]) -> Self {
-        let mut reader = ByteReader::new(bytes);
-        let word_count = reader.read_u32();
-
-        debug_assert!(bytes.len() >= 4 + word_count as usize * 4);
-
-        let mut arr = Vec::with_capacity(word_count as usize);
-
-        for chunk in reader.read_bytes(4 * word_count as usize).chunks(4) {
-            arr.push(u32::from_le_bytes(chunk.try_into().unwrap()));
-        }
-
+    pub fn from_raw(arr: Vec<u32>) -> Self {
         Self { arr }
     }
 
-    pub(crate) fn to_bytes(&self) -> Vec<u8> {
-        let mut bytes = alloc::vec![0u8; 4 + self.arr.len() * 4];
-
-        let word_count = self.arr.len() as u32;
-
-        bytes[0..4].copy_from_slice(&word_count.to_le_bytes());
-
-        for (i, word) in self.arr.iter().enumerate() {
-            let offset = 4 + i * 4;
-            bytes[offset..offset + 4].copy_from_slice(&word.to_le_bytes());
-        }
-
-        bytes
+    pub fn words(&self) -> &[u32] {
+        &self.arr
     }
 
-    pub(crate) fn set(&mut self, index: u32) {
+    pub fn set(&mut self, index: u32) {
         debug_assert!(
             index < self.arr.len() as u32 * 32,
             "Bitmap index {index} out of bounds"
@@ -60,7 +40,7 @@ impl Bitmap {
         self.arr[arr_index as usize] |= 1 << bit_index;
     }
 
-    pub(crate) fn unset(&mut self, index: u32) {
+    pub fn unset(&mut self, index: u32) {
         debug_assert!(
             index < self.arr.len() as u32 * 32,
             "Bitmap index {index} out of bounds"
@@ -71,7 +51,7 @@ impl Bitmap {
         self.arr[arr_index as usize] &= !(1 << bit_index);
     }
 
-    pub(crate) fn is_set(&self, index: u32) -> bool {
+    pub fn is_set(&self, index: u32) -> bool {
         debug_assert!(
             index < self.arr.len() as u32 * 32,
             "Bitmap index {index} out of bounds"
@@ -83,7 +63,7 @@ impl Bitmap {
     }
 
     /// Find the first free block in the bitmap.
-    pub(crate) fn find_free(&self) -> Option<u32> {
+    pub fn find_free(&self) -> Option<u32> {
         for (arr_idx, bits) in self.arr.iter().enumerate() {
             if bits != &u32::MAX {
                 let res = (!bits).trailing_zeros();
@@ -96,7 +76,7 @@ impl Bitmap {
     }
 
     /// Returns an iterator over all set bits and unsets them.
-    pub(crate) fn drain_set(&mut self) -> impl Iterator<Item = u32> {
+    pub fn drain_set(&mut self) -> impl Iterator<Item = u32> {
         self.arr.iter_mut().enumerate().flat_map(|(idx, n)| {
             core::iter::from_fn(move || {
                 if *n == 0 {
@@ -328,49 +308,5 @@ mod tests {
         for i in 0..64 {
             assert!(!bitmap.is_set(i));
         }
-    }
-
-    #[test]
-    fn round_trip() {
-        let mut bitmap = Bitmap::new(128);
-        for i in [0, 12, 88, 127, 66] {
-            bitmap.set(i);
-        }
-        let bytes = bitmap.to_bytes();
-        let new_bitmap = Bitmap::from_bytes(&bytes);
-        assert_eq!(new_bitmap, bitmap);
-    }
-
-    #[test]
-    fn round_trip_empty() {
-        let bitmap = Bitmap::new(64);
-        assert_eq!(Bitmap::from_bytes(&bitmap.to_bytes()), bitmap);
-    }
-
-    #[test]
-    fn round_trip_all_set() {
-        let mut bitmap = Bitmap::new(64);
-        for i in 0..64 {
-            bitmap.set(i);
-        }
-        assert_eq!(Bitmap::from_bytes(&bitmap.to_bytes()), bitmap);
-    }
-
-    #[test]
-    fn round_trip_large_buffer() {
-        // from_bytes is often called on a full 512-byte disk block
-        let mut bitmap = Bitmap::new(128);
-        bitmap.set(5);
-        bitmap.set(99);
-        let mut block = [0u8; 512];
-        let bytes = bitmap.to_bytes();
-        block[..bytes.len()].copy_from_slice(&bytes);
-        assert_eq!(Bitmap::from_bytes(&block), bitmap);
-    }
-
-    #[test]
-    fn to_bytes_correct_size() {
-        let bitmap = Bitmap::new(128); // 4 words
-        assert_eq!(bitmap.to_bytes().len(), 4 + 4 * 4);
     }
 }

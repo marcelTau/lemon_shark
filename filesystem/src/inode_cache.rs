@@ -1,4 +1,9 @@
-use crate::{BLOCK_SIZE, BlockDevice, INode, INodeIndex, bitmap::Bitmap, layout::Layout};
+use crate::{
+    BLOCK_SIZE, BlockDevice, INode, INodeIndex,
+    bytereader::{ByteReader, DiskFormat},
+    layout::Layout,
+};
+use bitmap::Bitmap;
 
 extern crate alloc;
 use alloc::vec::Vec;
@@ -28,7 +33,7 @@ impl INodeCache {
         let mut buf = [0u8; BLOCK_SIZE];
         let (block_index, byte_offset) = self.layout.as_ref().unwrap().inode_to_block(index);
         device.read_block(block_index, &mut buf);
-        INode::from_bytes(&buf[byte_offset.range::<INode>()])
+        INode::read_from(&mut ByteReader::new(&buf[byte_offset.range::<INode>()]))
     }
 
     /// Get a `&INode` from the cache, fetching it from disk when not present.

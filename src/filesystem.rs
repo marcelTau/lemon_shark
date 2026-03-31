@@ -3,10 +3,9 @@ use crate::println::UartWriter;
 use crate::virtio2::LockedBlockDevice;
 use crate::{print, println, ramdisk};
 use alloc::string::String;
-use core::sync::atomic::{AtomicBool, Ordering};
 use filesystem::{BlockDevice, Filesystem};
 
-pub use filesystem::{BlockIndex, Error, INodeIndex, BLOCK_SIZE};
+pub use filesystem::{BLOCK_SIZE, BlockIndex, Error, INodeIndex};
 
 /// The concrete block device used by the kernel, wrapping either the in-memory
 /// ramdisk or the VirtIO persistent storage.

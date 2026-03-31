@@ -1,0 +1,3 @@
+# Override the workspace riscv target so `cargo test` works on the host.
+[build]
+target = "x86_64-unknown-linux-gnu"

@@ -12,6 +12,7 @@ pub mod device_tree;
 pub mod filesystem;
 pub mod interrupts;
 pub mod klog;
+pub mod page_frame_allocator;
 pub mod println;
 pub mod ramdisk;
 pub mod shell;

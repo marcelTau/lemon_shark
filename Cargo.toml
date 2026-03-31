@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "filesystem", "allocator", "mkfs"]
+members = [".", "filesystem", "allocator", "mkfs", "bitmap"]
 resolver = "2"
 
 [package]
@@ -13,6 +13,10 @@ spin = "0.10.0"
 virtio-drivers = "0.12.0"
 filesystem = { path = "filesystem" }
 allocator = { path = "allocator" }
+log = { workspace = true }
+bitmap = { path = "bitmap" }
+
+[workspace.dependencies]
 log = { version = "0.4", default-features = false }
 
 [[bin]]

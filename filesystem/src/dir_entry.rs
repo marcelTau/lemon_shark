@@ -1,6 +1,7 @@
-use crate::{INodeIndex, bytereader::ByteReader};
-
-use core::mem;
+use crate::{
+    INodeIndex,
+    bytereader::{ByteReader, ByteWriter, DiskFormat},
+};
 
 extern crate alloc;
 use alloc::string::String;
@@ -48,20 +49,17 @@ impl DirEntry {
     pub(crate) fn inode(&self) -> INodeIndex {
         self.inode
     }
+}
 
-    pub(crate) fn from_bytes(bytes: &[u8]) -> Self {
-        let mut reader = ByteReader::new(bytes);
+impl DiskFormat for DirEntry {
+    fn write_to<'a>(&self, writer: &'a mut ByteWriter) {
+        writer.write_bytes(&self.name);
+        writer.write_u32(self.inode.inner());
+    }
+
+    fn read_from<'a>(reader: &'a mut ByteReader) -> Self {
         let name = reader.read_bytes(24).try_into().unwrap();
         let inode = INodeIndex::new(reader.read_u32());
         Self { name, inode }
-    }
-
-    pub(crate) fn to_bytes(&self) -> [u8; mem::size_of::<DirEntry>()] {
-        let mut bytes = [0u8; mem::size_of::<DirEntry>()];
-
-        bytes[0..24].copy_from_slice(self.name.as_slice());
-        bytes[24..28].copy_from_slice(&self.inode.inner().to_le_bytes());
-
-        bytes
     }
 }
