@@ -105,6 +105,7 @@ struct SystemInfo {
     pub timer_frequency: usize,
     pub cpus: usize,
     pub cpu_isa: String,
+    pub ram_base: usize,
     pub total_memory: usize,
 }
 
@@ -128,8 +129,12 @@ impl SystemInfo {
         // the page frame allocator. But testing locally has confirmed, that the `_kernel_end`
         // symbol comes after the reserved-memory and the .bss section as defined in the linker
         // script, hence this should be safe to use right now.
+        let mut ram_base = 0;
         let mut total_memory = 0;
         for region in fdt.memory().regions() {
+            if ram_base == 0 {
+                ram_base = region.starting_address as usize;
+            }
             if let Some(size) = region.size {
                 total_memory += size;
             }
@@ -174,6 +179,7 @@ impl SystemInfo {
             cpus: fdt.cpus().count(),
             cpu_isa: String::from_str(base_isa).unwrap(),
             timer_frequency: fdt.cpus().next().expect("No cpu?").timebase_frequency(),
+            ram_base,
             total_memory,
         }
     }
@@ -195,6 +201,10 @@ pub fn timer_frequency() -> usize {
 
 pub fn cpus() -> usize {
     SYSINFO.lock().inner().cpus
+}
+
+pub fn ram_base() -> usize {
+    SYSINFO.lock().inner().ram_base
 }
 
 pub fn total_memory() -> usize {

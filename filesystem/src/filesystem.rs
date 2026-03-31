@@ -22,7 +22,7 @@
 extern crate alloc;
 use crate::bytereader::{ByteReader, ByteWriter, DiskFormat};
 use crate::dir_entry::DirEntry;
-use crate::inode::{INODE_BLOCKS, INode};
+use crate::inode::{INode, INODE_BLOCKS};
 use crate::inode_cache::INodeCache;
 use crate::layout::Layout;
 use crate::{BlockIndex, INodeIndex};

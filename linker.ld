@@ -48,4 +48,7 @@ SECTIONS
         . += 1048576;
         _heap_end = .;
     }
+
+    . = ALIGN(4096); /* End of the kernel binary, from here on is free RAM */
+    _kernel_end = .;
 }
