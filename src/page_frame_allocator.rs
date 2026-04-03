@@ -1,4 +1,5 @@
 #![allow(unused)]
+
 use crate::device_tree;
 use bitmap::Bitmap;
 
@@ -128,6 +129,7 @@ impl VirtAddr {
 ///
 /// The PPN take up 44 bits here, plus the lower 12 that we know are 0, this gives us 2^56 bytes
 /// address space.
+#[derive(Copy, Clone)]
 struct PageTableEntry(usize);
 
 mod pte_flags {
@@ -175,6 +177,49 @@ impl PageTableEntry {
 #[repr(C)]
 struct PageTable {
     entries: [PageTableEntry; 512],
+}
+
+impl PageTable {
+    fn get_mut(&mut self, idx: usize) -> &mut PageTableEntry {
+        &mut self.entries[idx]
+    }
+
+    fn new_frame() -> PhysAddr {
+        let frame = alloc_frame().unwrap();
+
+        // Zero the memory of the new frame before using it.
+        unsafe {
+            (frame as *mut PageTable).write_bytes(0, 1);
+        }
+
+        frame
+    }
+
+    /// This function maps a physical address to a virtual address
+    unsafe fn map(&mut self, virt: VirtAddr, phys: PhysAddr, flags: usize) {
+        let l2_entry = self.get_mut(virt.vpn(Level::L2));
+
+        if !l2_entry.is_valid() {
+            let new_frame = Self::new_frame();
+            *l2_entry = PageTableEntry::new_branch(new_frame);
+        }
+
+        let l1_table = unsafe { &mut *(l2_entry.ppn() as *mut PageTable) };
+        let l1_entry = l1_table.get_mut(virt.vpn(Level::L1));
+
+        if !l1_entry.is_valid() {
+            let new_frame = Self::new_frame();
+            *l1_entry = PageTableEntry::new_branch(new_frame);
+        }
+
+        let l0_table = unsafe { &mut *(l1_entry.ppn() as *mut PageTable) };
+        let l0_entry = l0_table.get_mut(virt.vpn(Level::L0));
+
+        // At this point, the entry should not be valid as we're creating the mapping.
+        assert!(!l0_entry.is_valid());
+
+        *l0_entry = PageTableEntry::new_leaf(phys, flags);
+    }
 }
 
 // Translation Lookaside Buffer (TLB) - hardware
