@@ -1,4 +1,9 @@
-use crate::{BLOCK_SIZE, bytereader::DiskFormat, dir_entry::DirEntry, layout::DataBlockIndex};
+use crate::{
+    BLOCK_SIZE,
+    bytereader::{self, DiskFormat},
+    dir_entry::DirEntry,
+    layout::DataBlockIndex,
+};
 
 use core::mem;
 
@@ -112,7 +117,7 @@ impl INode {
 }
 
 impl DiskFormat for INode {
-    fn write_to<'a>(&self, writer: &'a mut crate::bytereader::ByteWriter) {
+    fn write_to(&self, writer: &mut bytereader::ByteWriter) {
         writer.write_u32(self.size);
 
         for block in self.blocks.iter().map(|b| b.to_block().map(|b| b.inner())) {
@@ -122,7 +127,7 @@ impl DiskFormat for INode {
         writer.write_u8(if self.is_directory { 1 } else { 0 });
     }
 
-    fn read_from<'a>(reader: &'a mut crate::bytereader::ByteReader) -> Self {
+    fn read_from(reader: &mut bytereader::ByteReader) -> Self {
         let size = reader.read_u32();
         let mut blocks: [DataBlockIndex; 16] = [Default::default(); 16];
 

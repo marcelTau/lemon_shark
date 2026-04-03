@@ -131,36 +131,36 @@ impl VirtAddr {
 struct PageTableEntry(usize);
 
 mod pte_flags {
-    const VALID: u8 = 1;
-    const READ: u8 = 1 << 1;
-    const WRITE: u8 = 1 << 2;
-    const EXECUTE: u8 = 1 << 3;
-    const USER: u8 = 1 << 4;
-    const GLOBAL: u8 = 1 << 5;
-    const ACCESSED: u8 = 1 << 6;
-    const DIRTY: u8 = 1 << 7;
+    pub const VALID: usize = 1;
+    pub const READ: usize = 1 << 1;
+    pub const WRITE: usize = 1 << 2;
+    pub const EXECUTE: usize = 1 << 3;
+    pub const USER: usize = 1 << 4;
+    pub const GLOBAL: usize = 1 << 5;
+    pub const ACCESSED: usize = 1 << 6;
+    pub const DIRTY: usize = 1 << 7;
 }
 
 impl PageTableEntry {
     fn new_leaf(addr: PhysAddr, flags: usize) -> Self {
         let ppn = addr >> 12;
-        PageTableEntry((ppn << 10) | flags | 1)
+        PageTableEntry((ppn << 10) | flags | pte_flags::VALID)
     }
 
     /// NOTE: Permissions are ignored by the hardware on non-leaf nodes, hence we don't care here.
     fn new_branch(addr: PhysAddr) -> Self {
         let ppn = addr >> 12;
-        PageTableEntry((ppn << 10) | 1)
+        PageTableEntry((ppn << 10) | pte_flags::VALID)
     }
 
     /// A PTE is valid if its `valid` bit is set. Otherwise the MMU will ignore this entry.
     fn is_valid(&self) -> bool {
-        self.0 & 1 == 1
+        self.0 & pte_flags::VALID == pte_flags::VALID
     }
 
     /// A node is a leaf-node if at least one of the permission bits are set (R/W/X)
     fn is_leaf(&self) -> bool {
-        self.0 & 0b0111 != 0
+        self.0 & (pte_flags::READ | pte_flags::WRITE | pte_flags::EXECUTE) != 0
     }
 
     /// The PPN (physical page number) is where this entry points to.

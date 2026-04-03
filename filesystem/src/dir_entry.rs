@@ -52,12 +52,12 @@ impl DirEntry {
 }
 
 impl DiskFormat for DirEntry {
-    fn write_to<'a>(&self, writer: &'a mut ByteWriter) {
+    fn write_to(&self, writer: &mut ByteWriter) {
         writer.write_bytes(&self.name);
         writer.write_u32(self.inode.inner());
     }
 
-    fn read_from<'a>(reader: &'a mut ByteReader) -> Self {
+    fn read_from(reader: &mut ByteReader) -> Self {
         let name = reader.read_bytes(24).try_into().unwrap();
         let inode = INodeIndex::new(reader.read_u32());
         Self { name, inode }

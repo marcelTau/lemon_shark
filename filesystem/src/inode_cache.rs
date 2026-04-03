@@ -33,7 +33,7 @@ impl INodeCache {
         let mut buf = [0u8; BLOCK_SIZE];
         let (block_index, byte_offset) = self.layout.as_ref().unwrap().inode_to_block(index);
         device.read_block(block_index, &mut buf);
-        INode::read_from(&mut ByteReader::new(&buf[byte_offset.range::<INode>()]))
+        INode::read_from(&mut ByteReader::at(&buf, byte_offset.0 as usize))
     }
 
     /// Get a `&INode` from the cache, fetching it from disk when not present.

@@ -25,12 +25,6 @@ impl BlockIndex {
 #[derive(Debug)]
 pub(crate) struct ByteOffset(pub(crate) u32);
 
-impl ByteOffset {
-    pub(crate) fn range<T>(&self) -> core::ops::Range<usize> {
-        self.0 as usize..self.0 as usize + mem::size_of::<T>()
-    }
-}
-
 /// This is the actual index of the INode.
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub struct INodeIndex(pub(crate) u32);

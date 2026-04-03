@@ -9,6 +9,10 @@ impl<'a> ByteReader<'a> {
         Self { bytes, pos: 0 }
     }
 
+    pub(crate) fn at(bytes: &'a [u8], pos: usize) -> Self {
+        Self { bytes, pos }
+    }
+
     pub(crate) fn read_u32(&mut self) -> u32 {
         let value = u32::from_le_bytes(self.bytes[self.pos..self.pos + 4].try_into().unwrap());
         self.pos += 4;
@@ -44,6 +48,10 @@ impl<'a> ByteWriter<'a> {
         Self { bytes, pos: 0 }
     }
 
+    pub(crate) fn at(bytes: &'a mut [u8], pos: usize) -> Self {
+        Self { bytes, pos }
+    }
+
     pub(crate) fn write_u32(&mut self, value: u32) {
         self.bytes[self.pos..self.pos + 4].copy_from_slice(&value.to_le_bytes());
         self.pos += 4;
@@ -71,9 +79,5 @@ pub(crate) trait DiskFormat: Sized {
 
     fn from_bytes(bytes: &[u8]) -> Self {
         Self::read_from(&mut ByteReader::new(bytes))
-    }
-
-    fn to_bytes(&self, bytes: &mut [u8]) {
-        self.write_to(&mut ByteWriter::new(bytes));
     }
 }

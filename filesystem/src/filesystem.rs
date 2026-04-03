@@ -22,7 +22,7 @@
 extern crate alloc;
 use crate::bytereader::{ByteReader, ByteWriter, DiskFormat};
 use crate::dir_entry::DirEntry;
-use crate::inode::{INode, INODE_BLOCKS};
+use crate::inode::{INODE_BLOCKS, INode};
 use crate::inode_cache::INodeCache;
 use crate::layout::Layout;
 use crate::{BlockIndex, INodeIndex};
@@ -99,12 +99,26 @@ impl Buffer {
         self.buf.fill(0);
     }
 
-    fn as_bytes(&self) -> &[u8] {
-        &self.buf
-    }
-
     fn inner(&mut self) -> &mut [u8] {
         &mut self.buf[..]
+    }
+
+    fn read_struct_at<T: DiskFormat>(&self, offset: usize) -> T {
+        T::read_from(&mut ByteReader::at(&self.buf, offset))
+    }
+
+    fn write_struct_at<T: DiskFormat>(&mut self, value: &T, offset: usize) {
+        value.write_to(&mut ByteWriter::at(&mut self.buf, offset));
+    }
+
+    fn iter_structs<T: DiskFormat + 'static>(&self) -> impl Iterator<Item = T> + '_ {
+        self.buf
+            .chunks_exact(mem::size_of::<T>())
+            .map(T::from_bytes)
+    }
+
+    fn clear_struct_at<T>(&mut self, offset: usize) {
+        self.buf[offset..offset + mem::size_of::<T>()].fill(0);
     }
 }
 
@@ -168,8 +182,7 @@ impl<'dev, Dev: BlockDevice> Iterator for DirEntryReader<'dev, Dev> {
         }
 
         let offset = self.buf_pos * mem::size_of::<DirEntry>();
-        let entry =
-            DirEntry::from_bytes(&self.buf.as_bytes()[offset..offset + mem::size_of::<DirEntry>()]);
+        let entry = self.buf.read_struct_at::<DirEntry>(offset);
         self.buf_pos += 1;
         self.remaining -= 1;
 
@@ -202,13 +215,13 @@ pub(crate) struct SuperBlock {
 }
 
 impl DiskFormat for SuperBlock {
-    fn write_to<'a>(&self, writer: &'a mut ByteWriter) {
+    fn write_to(&self, writer: &mut ByteWriter) {
         writer.write_u64(self.magic);
         writer.write_u32(self.block_size);
         writer.write_u32(self.total_blocks);
     }
 
-    fn read_from<'a>(reader: &'a mut ByteReader) -> Self {
+    fn read_from(reader: &mut ByteReader) -> Self {
         Self {
             magic: reader.read_u64(),
             block_size: reader.read_u32(),
@@ -288,8 +301,7 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
     ///
     /// Writes the superblock, initialises empty bitmaps, creates the root
     /// directory inode with `.` and `..` entries, and flushes everything to
-    /// disk. The returned `Filesystem` is ready for use (or can simply be
-    /// dropped if the caller only needed the formatted image).
+    /// disk.
     pub fn format(mut block_device: Dev) {
         let total_blocks = block_device.total_blocks() as u32;
         let layout = Layout::new(total_blocks);
@@ -326,7 +338,7 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
         let (index, offset) = self.layout.inode_to_block(INodeIndex::new(0));
         self.block_device.read_block(index, &mut buf);
 
-        let root_node = INode::read_from(&mut ByteReader::new(&buf[offset.range::<INode>()]));
+        let root_node = INode::read_from(&mut ByteReader::at(&buf, offset.0 as usize));
 
         if !root_node.is_directory() {
             return Err(Error::InvalidRootNode);
@@ -340,8 +352,7 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
         let (block_index, byte_offset) = self.layout.inode_to_block(inode_index);
 
         modify_block(&mut self.block_device, block_index, |buf| {
-            let mut writer = ByteWriter::new(&mut buf.inner()[byte_offset.range::<INode>()]);
-            inode.write_to(&mut writer);
+            buf.write_struct_at(inode, byte_offset.0 as usize);
         });
     }
 
@@ -432,20 +443,17 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
             return Err(Error::NotFound);
         };
 
+        // Read the last entry from disk - then zero out its memory
         let last_entry = modify_block(&mut self.block_device, last_block_index, |buf| {
-            let end = last_block_offset + mem::size_of::<DirEntry>();
-            let entry = DirEntry::from_bytes(&buf.as_bytes()[last_block_offset..end]);
-            buf.inner()[last_block_offset..end].fill(0);
+            let entry = buf.read_struct_at::<DirEntry>(last_block_offset);
+            buf.clear_struct_at::<DirEntry>(last_block_offset);
             entry
         });
 
         if found.logical_index != num_parent_entries - 1 {
             // swap-remove the entry
             modify_block(&mut self.block_device, found.block_index, |buf| {
-                last_entry.to_bytes(
-                    &mut buf.inner()
-                        [found.byte_offset..found.byte_offset + mem::size_of::<DirEntry>()],
-                );
+                buf.write_struct_at(&last_entry, found.byte_offset);
             });
         }
 
@@ -607,9 +615,7 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
         let block_index = block.to_block().expect("Is set by block above");
 
         modify_block(&mut self.block_device, block_index, |buf| {
-            entry.to_bytes(
-                &mut buf.inner()[slot.byte_offset..slot.byte_offset + mem::size_of::<DirEntry>()],
-            );
+            buf.write_struct_at(&entry, slot.byte_offset);
         });
 
         inode.advance(DIR_ENTRY_SIZE);
@@ -640,9 +646,7 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
 
             for i in 0..items_in_block {
                 let start = i * mem::size_of::<DirEntry>();
-                res.push(DirEntry::from_bytes(
-                    &buf.as_bytes()[start..start + mem::size_of::<DirEntry>()],
-                ));
+                res.push(buf.read_struct_at::<DirEntry>(start));
             }
 
             if res.len() == max_items {
@@ -791,9 +795,7 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
         for block in inode.used_blocks().map(|b| b.to_block().unwrap()) {
             self.block_device.read_block(block, buf.inner());
 
-            buf.as_bytes()
-                .chunks_exact(mem::size_of::<DirEntry>())
-                .map(DirEntry::from_bytes)
+            buf.iter_structs::<DirEntry>()
                 .filter(|e| !e.name().is_empty())
                 .for_each(|e| {
                     writeln!(out, "\t{e:?}").unwrap();

@@ -17,7 +17,7 @@ pub(crate) use filesystem::{INODES_PER_BLOCK, MAX_INODES};
 pub(crate) use inode::INode;
 
 impl DiskFormat for Bitmap {
-    fn write_to<'a>(&self, writer: &'a mut bytereader::ByteWriter) {
+    fn write_to(&self, writer: &mut bytereader::ByteWriter) {
         let words = self.words();
         writer.write_u32(words.len() as u32);
         for &word in words {
@@ -25,7 +25,7 @@ impl DiskFormat for Bitmap {
         }
     }
 
-    fn read_from<'a>(reader: &'a mut bytereader::ByteReader) -> Self {
+    fn read_from(reader: &mut bytereader::ByteReader) -> Self {
         let word_count = reader.read_u32();
         let arr = (0..word_count).map(|_| reader.read_u32()).collect();
 
