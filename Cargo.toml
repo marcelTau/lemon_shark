@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "filesystem", "allocator", "mkfs", "bitmap"]
+members = [".", "filesystem", "allocator", "mkfs", "bitmap", "virtual_memory"]
 resolver = "2"
 
 [package]
@@ -15,6 +15,7 @@ filesystem = { path = "filesystem" }
 allocator = { path = "allocator" }
 log = { workspace = true }
 bitmap = { path = "bitmap" }
+virtual_memory = { path = "virtual_memory" }
 
 [workspace.dependencies]
 log = { version = "0.4", default-features = false }

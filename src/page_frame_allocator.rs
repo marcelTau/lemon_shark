@@ -1,10 +1,6 @@
-#![allow(unused)]
-
 use crate::device_tree;
 use bitmap::Bitmap;
-
-type PhysAddr = usize;
-const PAGE_SIZE: usize = 4096;
+use virtual_memory::{PhysAddr, PAGE_SIZE};
 
 static PAGE_FRAME_ALLOCATOR: spin::Mutex<Option<PageFrameAllocator>> = spin::Mutex::new(None);
 
@@ -36,7 +32,7 @@ impl PageFrameAllocator {
         }
     }
 
-    pub fn alloc(&mut self) -> Option<PhysAddr> {
+    fn alloc(&mut self) -> Option<PhysAddr> {
         let idx = self.free.find_free();
 
         if let Some(idx) = idx {
@@ -46,7 +42,7 @@ impl PageFrameAllocator {
         idx.map(|idx| self.start + PAGE_SIZE * idx as usize)
     }
 
-    pub fn free(&mut self, addr: PhysAddr) {
+    fn free(&mut self, addr: PhysAddr) {
         let idx = (addr - self.start) / PAGE_SIZE;
         self.free.unset(idx as u32);
     }
@@ -71,186 +67,3 @@ pub fn init() {
         }
     }
 }
-
-/// Sv39 - Virtual Address
-/// +---------+--------+--------+--------+-------------+
-/// | 63 - 39 | 9-bits | 9-bits | 9-bits | 12-bits     |
-/// +---------+--------+--------+--------+-------------+
-/// |    0    | L2 idx | L1 idx | L0 idx | page offset |
-/// +---------+--------+--------+--------+-------------+
-struct VirtAddr(usize);
-
-enum Level {
-    L0,
-    L1,
-    L2,
-}
-
-impl VirtAddr {
-    fn vpn(&self, level: Level) -> usize {
-        let val = self.0;
-        match level {
-            Level::L0 => (val >> 12) & 0x1FF,
-            Level::L1 => (val >> 21) & 0x1FF,
-            Level::L2 => (val >> 30) & 0x1FF,
-        }
-    }
-
-    fn offset(&self) -> usize {
-        self.0 & 0xFFF
-    }
-}
-
-/// Terminology
-/// PPN: Physical Page Number
-
-/// A page table entry always has the following format.
-///
-/// 63           54 53        28 27        19 18        10 9     8 7 6 5 4 3 2 1 0
-/// +---------------+------------+------------+------------+-----+-+-+-+-+-+-+-+-+
-/// |    Reserved   | PPN[2]     | PPN[1]     | PPN[0]     | RSW |D|A|G|U|X|W|R|V|
-/// +---------------+------------+------------+------------+-----+-+-+-+-+-+-+-+-+
-///
-/// bit 0: valid (must be 1, if not MMU ignores this page)
-/// bit 1: read
-/// bit 2: write
-/// bit 3: execute
-/// bit 4: user - accessible from U-mode (userspace)
-/// bit 5: global - mapping exists in all address spaces (useful for the kernel pages as discussed
-///                 below)
-/// bit 6: accessed - hardware sets this when page is read/written
-/// bit 7: dirty - hardware sets this when page is written
-///
-/// Non-leaf nodes have all permissions 0 - leaf nodes must have at least one non-zero of (R/W/X)
-///
-/// The fact that pages are always 4k aligned, allows us to use the lower bits for something else.
-/// In the case of the PTE, the lower 10 bits are used for flags. Because we know that the page is
-/// 4k aligned, we can just << 12 the address and get the correct address without wasting space.
-///
-/// The PPN take up 44 bits here, plus the lower 12 that we know are 0, this gives us 2^56 bytes
-/// address space.
-#[derive(Copy, Clone)]
-struct PageTableEntry(usize);
-
-mod pte_flags {
-    pub const VALID: usize = 1;
-    pub const READ: usize = 1 << 1;
-    pub const WRITE: usize = 1 << 2;
-    pub const EXECUTE: usize = 1 << 3;
-    pub const USER: usize = 1 << 4;
-    pub const GLOBAL: usize = 1 << 5;
-    pub const ACCESSED: usize = 1 << 6;
-    pub const DIRTY: usize = 1 << 7;
-}
-
-impl PageTableEntry {
-    fn new_leaf(addr: PhysAddr, flags: usize) -> Self {
-        let ppn = addr >> 12;
-        PageTableEntry((ppn << 10) | flags | pte_flags::VALID)
-    }
-
-    /// NOTE: Permissions are ignored by the hardware on non-leaf nodes, hence we don't care here.
-    fn new_branch(addr: PhysAddr) -> Self {
-        let ppn = addr >> 12;
-        PageTableEntry((ppn << 10) | pte_flags::VALID)
-    }
-
-    /// A PTE is valid if its `valid` bit is set. Otherwise the MMU will ignore this entry.
-    fn is_valid(&self) -> bool {
-        self.0 & pte_flags::VALID == pte_flags::VALID
-    }
-
-    /// A node is a leaf-node if at least one of the permission bits are set (R/W/X)
-    fn is_leaf(&self) -> bool {
-        self.0 & (pte_flags::READ | pte_flags::WRITE | pte_flags::EXECUTE) != 0
-    }
-
-    /// The PPN (physical page number) is where this entry points to.
-    ///
-    /// For non-leaf nodes this always points to the physical address of the next page table.
-    /// For leaf nodes, this points to the actual physical frame.
-    fn ppn(&self) -> usize {
-        (self.0 >> 10) << 12
-    }
-}
-
-#[repr(C)]
-struct PageTable {
-    entries: [PageTableEntry; 512],
-}
-
-impl PageTable {
-    fn get_mut(&mut self, idx: usize) -> &mut PageTableEntry {
-        &mut self.entries[idx]
-    }
-
-    fn new_frame() -> PhysAddr {
-        let frame = alloc_frame().unwrap();
-
-        // Zero the memory of the new frame before using it.
-        unsafe {
-            (frame as *mut PageTable).write_bytes(0, 1);
-        }
-
-        frame
-    }
-
-    /// This function maps a physical address to a virtual address
-    unsafe fn map(&mut self, virt: VirtAddr, phys: PhysAddr, flags: usize) {
-        let l2_entry = self.get_mut(virt.vpn(Level::L2));
-
-        if !l2_entry.is_valid() {
-            let new_frame = Self::new_frame();
-            *l2_entry = PageTableEntry::new_branch(new_frame);
-        }
-
-        let l1_table = unsafe { &mut *(l2_entry.ppn() as *mut PageTable) };
-        let l1_entry = l1_table.get_mut(virt.vpn(Level::L1));
-
-        if !l1_entry.is_valid() {
-            let new_frame = Self::new_frame();
-            *l1_entry = PageTableEntry::new_branch(new_frame);
-        }
-
-        let l0_table = unsafe { &mut *(l1_entry.ppn() as *mut PageTable) };
-        let l0_entry = l0_table.get_mut(virt.vpn(Level::L0));
-
-        // At this point, the entry should not be valid as we're creating the mapping.
-        assert!(!l0_entry.is_valid());
-
-        *l0_entry = PageTableEntry::new_leaf(phys, flags);
-    }
-}
-
-// Translation Lookaside Buffer (TLB) - hardware
-// Is a cache for recent Virtual Memory Translation.
-// IMPORTANT: Need to invalidate via `sfence.vma` when processes switch (i.e
-
-/*
-
-Each page table is 4k in size and holds 512 entries (each 8byte)
-
-A physical Frame is the actual memory (size=4k)
-A virtual Page is also 4k
-
-We add 3 levels for the page table.
-
-Each of the levels has 512 entries that point to other page tables.
-
-The first page table L2 points to L1 tables which points to L0 tables.
-The entries in the L0 table point to a phyiscal page.
-
-Each process has it's own page table.
-
-The last entry in the L2 page table is a pointer to the kernels page L1 table. This is done so that the trap handler access is still valid through
-the kernels page tables.
-
-This is also why we're loading the kernel into a high memory address.
-
-Translating an address would mean
-1. Get page table at index [L2]
-2. In there get page table at index [L1]
-3. In there get page table at index [L0]
-4. Now we have the physical page - get the address at [offset]
-
- */

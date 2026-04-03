@@ -1,7 +1,7 @@
 use core::mem;
 use core::num::NonZeroU32;
 
-use crate::{BLOCK_SIZE, INODES_PER_BLOCK, INode, MAX_INODES};
+use crate::{INode, BLOCK_SIZE, INODES_PER_BLOCK, MAX_INODES};
 
 /// An Index into the blocks used for the block device.
 #[derive(Debug, Clone, Copy)]
@@ -156,8 +156,4 @@ impl Layout {
     pub(crate) fn data_block(&self, val: u32) -> DataBlockIndex {
         DataBlockIndex::new(self.data_start as u32, val)
     }
-
-    // pub(crate) fn data_to_block(&self, data: DataBlockIndex) -> BlockIndex {
-    //     data.to_block().unwrap()
-    // }
 }

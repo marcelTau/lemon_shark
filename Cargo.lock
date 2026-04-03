@@ -64,6 +64,7 @@ dependencies = [
  "log",
  "spin",
  "virtio-drivers",
+ "virtual_memory",
 ]
 
 [[package]]
@@ -180,6 +181,13 @@ dependencies = [
  "safe-mmio",
  "thiserror",
  "zerocopy",
+]
+
+[[package]]
+name = "virtual_memory"
+version = "0.1.0"
+dependencies = [
+ "log",
 ]
 
 [[package]]
