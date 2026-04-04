@@ -109,11 +109,18 @@ impl PageTableEntry {
 }
 
 #[repr(C)]
+#[repr(align(4096))]
 pub struct PageTable {
     entries: [PageTableEntry; 512],
 }
 
 impl PageTable {
+    pub const fn new() -> PageTable {
+        Self {
+            entries: [const { PageTableEntry(0) }; 512],
+        }
+    }
+
     pub fn get_mut(&mut self, idx: usize) -> &mut PageTableEntry {
         &mut self.entries[idx]
     }
@@ -121,9 +128,9 @@ impl PageTable {
     /// Allocate and zero a new frame using the provided allocator, returning it as a PageTable.
     ///
     /// SAFETY: `alloc` must return a valid, writable, 4KB-aligned physical address.
-    unsafe fn new_table<F>(alloc: &mut F) -> PhysAddr
+    unsafe fn new_table<F>(alloc: &F) -> PhysAddr
     where
-        F: FnMut() -> PhysAddr,
+        F: Fn() -> PhysAddr,
     {
         let frame = alloc();
         unsafe {
@@ -138,14 +145,14 @@ impl PageTable {
     ///
     /// SAFETY: `alloc` must return valid 4KB-aligned physical frames. All physical addresses must
     /// be accessible (identity-mapped or otherwise reachable) at the time of the call.
-    pub unsafe fn map<F>(&mut self, virt: VirtAddr, phys: PhysAddr, flags: usize, alloc: &mut F)
+    pub unsafe fn map<F>(&mut self, virt: VirtAddr, phys: PhysAddr, flags: usize, alloc: F)
     where
-        F: FnMut() -> PhysAddr,
+        F: Fn() -> PhysAddr,
     {
         let l2_entry = self.get_mut(virt.vpn(Level::L2));
 
         if !l2_entry.is_valid() {
-            let frame = unsafe { Self::new_table(alloc) };
+            let frame = unsafe { Self::new_table(&alloc) };
             *l2_entry = PageTableEntry::new_branch(frame);
         }
 
@@ -153,7 +160,7 @@ impl PageTable {
         let l1_entry = l1_table.get_mut(virt.vpn(Level::L1));
 
         if !l1_entry.is_valid() {
-            let frame = unsafe { Self::new_table(alloc) };
+            let frame = unsafe { Self::new_table(&alloc) };
             *l1_entry = PageTableEntry::new_branch(frame);
         }
 
@@ -170,7 +177,7 @@ impl PageTable {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::alloc::{alloc_zeroed, Layout};
+    use std::alloc::{Layout, alloc_zeroed};
 
     /// Allocate a single zeroed 4KB-aligned frame from the host allocator.
     fn alloc_test_frame() -> PhysAddr {
@@ -255,7 +262,7 @@ mod tests {
                 VirtAddr::from_parts(1, 2, 3, 0x100),
                 phys,
                 pte_flags::READ | pte_flags::WRITE,
-                &mut alloc_test_frame,
+                alloc_test_frame,
             );
         }
 
@@ -287,9 +294,9 @@ mod tests {
         let root_frame = alloc_test_frame();
         let root = unsafe { &mut *(root_frame as *mut PageTable) };
 
-        let mut alloc_count = 0usize;
-        let mut counting_alloc = || {
-            alloc_count += 1;
+        let alloc_count = std::cell::RefCell::new(0usize);
+        let counting_alloc = || {
+            *alloc_count.borrow_mut() += 1;
             alloc_test_frame()
         };
 
@@ -298,19 +305,19 @@ mod tests {
                 VirtAddr::from_parts(1, 2, 3, 0),
                 phys_a,
                 pte_flags::READ,
-                &mut counting_alloc,
+                &counting_alloc,
             );
             root.map(
                 VirtAddr::from_parts(1, 2, 4, 0),
                 phys_b,
                 pte_flags::READ,
-                &mut counting_alloc,
+                &counting_alloc,
             );
         }
 
         // First map allocates 2 intermediate tables (L1 and L0 level).
         // Second map reuses both, so only 2 allocations total.
-        assert_eq!(alloc_count, 2);
+        assert_eq!(*alloc_count.borrow(), 2);
 
         // Both leaves should point to their respective physical frames
         let l2_entry = root.get_mut(1);

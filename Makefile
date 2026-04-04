@@ -38,3 +38,4 @@ test:
 	@cargo test -p allocator --target x86_64-unknown-linux-gnu
 	@cargo test -p filesystem --target x86_64-unknown-linux-gnu
 	@cargo test -p virtual_memory --target x86_64-unknown-linux-gnu
+	@cargo test -p bitmap --target x86_64-unknown-linux-gnu

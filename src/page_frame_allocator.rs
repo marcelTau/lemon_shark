@@ -1,6 +1,6 @@
 use crate::device_tree;
 use bitmap::Bitmap;
-use virtual_memory::{PhysAddr, PAGE_SIZE};
+use virtual_memory::{PAGE_SIZE, PhysAddr};
 
 static PAGE_FRAME_ALLOCATOR: spin::Mutex<Option<PageFrameAllocator>> = spin::Mutex::new(None);
 
@@ -15,11 +15,11 @@ impl PageFrameAllocator {
     /// page-aligned and point to an address right after the kernels binary and in unused RAM.
     unsafe fn new() -> Self {
         unsafe extern "C" {
-            static _kernel_end: usize;
+            static _kernel_end: u8;
         }
         let size = device_tree::total_memory();
 
-        let kernel_end = unsafe { _kernel_end };
+        let kernel_end = unsafe { &_kernel_end as *const u8 as usize };
         let ram_end = device_tree::ram_base() + size;
 
         let num_pages = ((ram_end - kernel_end) / PAGE_SIZE) & !31;
