@@ -59,20 +59,18 @@ pub trait BlockDevice {
 #[derive(Debug, PartialEq)]
 pub enum Error {
     NotADirectory,
-    NotAFile,
-    NoSpaceInFile,
-    OutOfMemory,
-
-    // -- new errors --
-    DuplicatedEntry,
-    NoNameProvided,
+    IsDirectory,
+    FileTooLarge,
+    NoSpaceLeft,
+    EntryExists,
+    EmptyName,
     NameTooLong,
     NotFound,
     NotEmpty,
-    INodeBlocksExhausted,
-    INodeBitmapExhausted,
-    Unsupported,
-    InvalidRootNode,
+    NoFreeInodeBlocks,
+    NoFreeInodes,
+    OperationNotSupported,
+    CorruptedRoot,
     InvalidSuperblock,
 }
 
@@ -341,7 +339,7 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
         let root_node = INode::read_from(&mut ByteReader::at(&buf, offset.0 as usize));
 
         if !root_node.is_directory() {
-            return Err(Error::InvalidRootNode);
+            return Err(Error::CorruptedRoot);
         }
 
         Ok(())
@@ -481,7 +479,7 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
 
         // TODO(mt): right now we only support removing files, not directories as this would require removing all of it's files etc.
         if to_remove_inode.is_directory() {
-            return Err(Error::Unsupported);
+            return Err(Error::OperationNotSupported);
         }
 
         // Free the blocks of the deleted inode.
@@ -511,7 +509,7 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
         // Start traversing at root index.
         let mut current = INodeIndex::new(0);
 
-        let new_entry_name = parts.pop().ok_or(Error::NoNameProvided)?;
+        let new_entry_name = parts.pop().ok_or(Error::EmptyName)?;
 
         if new_entry_name.len() > 24 {
             return Err(Error::NameTooLong);
@@ -545,7 +543,7 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
         let parent_inode = self.inode_cache.get(current, &mut self.block_device);
 
         if !parent_inode.has_space() {
-            return Err(Error::INodeBlocksExhausted);
+            return Err(Error::NoFreeInodeBlocks);
         }
 
         if self
@@ -553,7 +551,7 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
             .iter()
             .any(|e| Self::byte_compare(new_entry_name, &e.name()))
         {
-            return Err(Error::DuplicatedEntry);
+            return Err(Error::EntryExists);
         }
 
         // Create new `INode`.
@@ -563,9 +561,7 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
         };
 
         // Write that `INode` to disk to get the index.
-        let inode_index = self
-            .new_inode(&new_inode)
-            .ok_or(Error::INodeBitmapExhausted)?;
+        let inode_index = self.new_inode(&new_inode).ok_or(Error::NoFreeInodes)?;
 
         // Create a `DirEntry` with `name` for the new directory and link it
         // to root.
@@ -602,7 +598,7 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
         let slot = inode.write_slot();
 
         let Some(block) = slot.block else {
-            return Err(Error::INodeBlocksExhausted);
+            return Err(Error::NoFreeInodeBlocks);
         };
 
         if block.is_empty() {
@@ -686,11 +682,11 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
             .get_mut(resolved.basename, &mut self.block_device);
 
         if inode.is_directory() {
-            return Err(Error::NotAFile);
+            return Err(Error::IsDirectory);
         }
 
         if inode.size() as usize + bytes.len() > 16 * BLOCK_SIZE {
-            return Err(Error::NoSpaceInFile);
+            return Err(Error::FileTooLarge);
         }
 
         let mut total_bytes = bytes.len();
@@ -700,11 +696,11 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
             let slot = inode.write_slot();
 
             let Some(block) = slot.block else {
-                return Err(Error::NoSpaceInFile);
+                return Err(Error::FileTooLarge);
             };
 
             if block.is_empty() {
-                let free = self.data_bitmap.find_free().ok_or(Error::OutOfMemory)?;
+                let free = self.data_bitmap.find_free().ok_or(Error::NoSpaceLeft)?;
                 let free_block_index = self.layout.data_block(free);
                 *block = free_block_index;
                 self.data_bitmap.set(free);
@@ -743,7 +739,7 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
             .get_mut(resolved.basename, &mut self.block_device);
 
         if inode.is_directory() {
-            return Err(Error::NotAFile);
+            return Err(Error::IsDirectory);
         }
 
         let mut buf = Buffer::new();
@@ -1108,7 +1104,7 @@ mod tests {
         let read_back = fs.read_file("/max.txt").unwrap();
 
         assert_eq!(written, MAX_FILE_SIZE);
-        assert_eq!(overflow.err(), Some(Error::NoSpaceInFile));
+        assert_eq!(overflow.err(), Some(Error::FileTooLarge));
         assert_eq!(read_back.len(), MAX_FILE_SIZE);
         assert!(read_back.as_bytes().iter().all(|b| *b == b'Z'));
     }
@@ -1125,7 +1121,7 @@ mod tests {
         assert_eq!(bytes_written, 511);
 
         let failed = fs.create_file("/text.txt");
-        assert_eq!(failed.err(), Some(Error::DuplicatedEntry));
+        assert_eq!(failed.err(), Some(Error::EntryExists));
 
         fs.create_file("/other-text.txt")
             .expect("Unable to create file");
@@ -1160,7 +1156,7 @@ mod tests {
         fs.mkdir("/dup").unwrap();
         let res = fs.mkdir("/dup");
 
-        assert_eq!(res.err(), Some(Error::DuplicatedEntry));
+        assert_eq!(res.err(), Some(Error::EntryExists));
     }
 
     #[test]
@@ -1170,7 +1166,7 @@ mod tests {
         fs.create_file("/same").unwrap();
         let res = fs.mkdir("/same");
 
-        assert_eq!(res.err(), Some(Error::DuplicatedEntry));
+        assert_eq!(res.err(), Some(Error::EntryExists));
     }
 
     #[test]
@@ -1180,7 +1176,7 @@ mod tests {
         fs.mkdir("/same").unwrap();
         let res = fs.create_file("/same");
 
-        assert_eq!(res.err(), Some(Error::DuplicatedEntry));
+        assert_eq!(res.err(), Some(Error::EntryExists));
     }
 
     #[test]
@@ -1300,9 +1296,9 @@ mod tests {
 
         assert!(
             overflow.is_ok(),
-            "create_file should return Err(INodeBlocksExhausted), not panic"
+            "create_file should return Err(NoFreeInodeBlocks), not panic"
         );
-        assert_eq!(overflow.unwrap().err(), Some(Error::INodeBlocksExhausted));
+        assert_eq!(overflow.unwrap().err(), Some(Error::NoFreeInodeBlocks));
     }
 
     #[test]
@@ -1536,7 +1532,7 @@ mod tests {
             "failed create must not leak inode allocations"
         );
         assert!(result.is_ok(), "failed create should return Err, not panic");
-        assert_eq!(result.unwrap().err(), Some(Error::INodeBlocksExhausted));
+        assert_eq!(result.unwrap().err(), Some(Error::NoFreeInodeBlocks));
     }
 
     #[test]
@@ -1599,7 +1595,7 @@ mod tests {
         fs.write_to_file("/test.txt", content.as_bytes()).unwrap();
 
         let res = fs.write_to_file("/test.txt", b"overflow");
-        assert_eq!(res.err(), Some(Error::NoSpaceInFile));
+        assert_eq!(res.err(), Some(Error::FileTooLarge));
     }
 
     #[test]
@@ -1617,7 +1613,7 @@ mod tests {
 
         fs.mkdir("/test").unwrap();
         let res = fs.write_to_file("/test", b"xd");
-        assert_eq!(res.err(), Some(Error::NotAFile));
+        assert_eq!(res.err(), Some(Error::IsDirectory));
     }
 
     #[test]
@@ -1674,7 +1670,7 @@ mod tests {
 
         fs.mkdir("/emptydir").unwrap();
         let res = fs.remove_dir_entry("/emptydir");
-        assert_eq!(res.err(), Some(Error::Unsupported));
+        assert_eq!(res.err(), Some(Error::OperationNotSupported));
     }
 
     #[test]
@@ -1796,7 +1792,7 @@ mod tests {
         fs.create_file("/a/child.txt").unwrap();
 
         let res = fs.remove_dir_entry("/a");
-        assert_eq!(res.err(), Some(Error::Unsupported));
+        assert_eq!(res.err(), Some(Error::OperationNotSupported));
     }
 
     #[test]
