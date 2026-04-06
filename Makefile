@@ -9,7 +9,7 @@ ARGS := -machine virt \
 		-bios default \
 		-cpu rv64     \
 		-display none \
-		-chardev stdio,id=con,signal=off \
+		-chardev stdio,id=con,signal=on \
 		-serial chardev:con \
 		-drive file=lemonfs.img,if=none,format=raw,id=hd0 \
 		-device virtio-blk-device,drive=hd0 \
