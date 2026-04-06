@@ -1,9 +1,7 @@
 use core::arch::asm;
 use core::arch::naked_asm;
-use core::sync::atomic::{AtomicBool, Ordering};
 
-/// Atomic that indicates that there was a `TRAP`.
-pub static TRAP: AtomicBool = AtomicBool::new(false);
+use crate::println;
 
 #[derive(Debug, PartialEq)]
 enum ScauseReason {
@@ -157,13 +155,11 @@ extern "C" fn trap_handler_rust() {
 
     let scause = Scause(scause);
 
+    log::info!("Trap: {scause:?}");
+
     match scause.reason() {
         ScauseReason::SupervisorTimerInterrupt => {
             crate::timer::new_time(1);
-
-            // Setting the TRAP to true if it's currently false, not changing it if it's true.
-            // Don't care about the result here.
-            let _ = TRAP.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst);
         }
         ScauseReason::Breakpoint => {
             // Determine ebreak size and skip it
