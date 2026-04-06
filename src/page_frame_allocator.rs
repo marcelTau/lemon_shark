@@ -1,6 +1,6 @@
 use crate::device_tree;
 use bitmap::Bitmap;
-use virtual_memory::{PAGE_SIZE, PhysAddr};
+use virtual_memory::{PhysAddr, PAGE_SIZE};
 
 static PAGE_FRAME_ALLOCATOR: spin::Mutex<Option<PageFrameAllocator>> = spin::Mutex::new(None);
 
@@ -25,6 +25,12 @@ impl PageFrameAllocator {
         let num_pages = ((ram_end - kernel_end) / PAGE_SIZE) & !31;
 
         log::info!("[PageFrameAllocator] Found {num_pages} pages");
+
+        log::info!(
+            "[PageFrameAllocator] start={} multiple_of_8={}",
+            kernel_end,
+            kernel_end.is_multiple_of(0x8)
+        );
 
         Self {
             start: kernel_end,
