@@ -193,7 +193,7 @@ impl ShellCommand {
                 ShellCommand::Mkdir { name }
             }
             "touch" => {
-                let name = String::from_str(parts.get(1).unwrap()).unwrap();
+                let name = normalize_root_path(parts.get(1)?);
                 ShellCommand::Touch { path: name }
             }
             "rm" => {
@@ -207,10 +207,9 @@ impl ShellCommand {
             "dumpfs" => ShellCommand::DumpFs,
             "flush" => ShellCommand::Flush,
             "write" => {
-                let (inode_index, rest) = parts.split_at(2);
-
+                let (head, rest) = parts.split_at(2);
                 ShellCommand::Write {
-                    path: inode_index[1].parse().unwrap(),
+                    path: normalize_root_path(head.get(1)?),
                     text: rest.join(" "),
                 }
             }
