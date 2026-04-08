@@ -248,6 +248,21 @@ pub struct Filesystem<D> {
     layout: Layout,
 }
 
+fn entry_display(inode: &INode, name: String) -> (char, String, String) {
+    let type_char = if inode.is_directory() { 'd' } else { 'f' };
+    let size_str = if inode.is_directory() {
+        "-".into()
+    } else {
+        alloc::format!("{}", inode.size())
+    };
+    let display_name = if inode.is_directory() {
+        alloc::format!("{name}/")
+    } else {
+        name
+    };
+    (type_char, size_str, display_name)
+}
+
 impl<Dev: BlockDevice> Filesystem<Dev> {
     /// Reads the superblock from block_index 0 if the filesystem has the right format.
     fn read_superblock(block_device: &mut Dev) -> Option<SuperBlock> {
@@ -625,7 +640,7 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
         let inode = self.inode_cache.get(inode_index, &mut self.block_device);
 
         // If the `INode` is empty there is nothing to do here.
-        if inode.size() == 0 {
+        if inode.size() == 0 || !inode.is_directory() {
             return Vec::new();
         }
 
@@ -779,8 +794,6 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
 
         log::info!("Found inode_index={inode_index:?} for path=\"{path}\"");
 
-        let mut buf = Buffer::new();
-
         let inode = *self.lookup_inode(inode_index);
         log::info!("Found inode={inode:?} for path=\"{path}\"");
 
@@ -788,14 +801,26 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
             return Err(Error::NotADirectory);
         }
 
-        for block in inode.used_blocks().map(|b| b.to_block().unwrap()) {
-            self.block_device.read_block(block, buf.inner());
+        let entries = self.read_dir_entry(inode_index);
 
-            buf.iter_structs::<DirEntry>()
-                .filter(|e| !e.name().is_empty())
-                .for_each(|e| {
-                    writeln!(out, "\t{e:?}").unwrap();
-                });
+        let _ = writeln!(out, "  TYPE  INODE       SIZE  NAME");
+        let _ = writeln!(out, "  ----  -----  ---------  ----");
+
+        for entry in entries.iter() {
+            let name = entry.name();
+            if name.is_empty() {
+                continue;
+            }
+            let entry_inode = *self.inode_cache.get(entry.inode(), &mut self.block_device);
+            let (type_char, size_str, display_name) = entry_display(&entry_inode, name);
+            let _ = writeln!(
+                out,
+                "  {}     [{:>3}]  {:>9}  {}",
+                type_char,
+                entry.inode().inner(),
+                size_str,
+                display_name
+            );
         }
 
         Ok(())
@@ -805,41 +830,43 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
         fn inner(
             fs: &mut Filesystem<impl BlockDevice>,
             entry: &DirEntry,
-            indent: u8,
+            prefix: &str,
+            is_last: bool,
             out: &mut impl core::fmt::Write,
         ) {
-            let entries = fs.read_dir_entry(entry.inode());
+            let connector = if is_last { "└── " } else { "├── " };
+            let entry_inode = *fs.inode_cache.get(entry.inode(), &mut fs.block_device);
+            let (type_char, size_str, name) = entry_display(&entry_inode, entry.name());
+            let _ = writeln!(
+                out,
+                "{}{}{}  {:>9}  {}",
+                prefix, connector, type_char, size_str, name
+            );
 
-            if !entries.iter().any(|e| {
-                fs.inode_cache
-                    .get(e.inode(), &mut fs.block_device)
-                    .is_directory()
-            }) {
-                return;
-            }
-
-            let inode = fs.inode_cache.get(entry.inode(), &mut fs.block_device);
-
-            if inode.is_directory() {
-                let _ = writeln!(out, "{}{}", " ".repeat(indent as usize), entry.name());
-            }
-
-            for entry in entries.iter().filter(|e| !e.name().starts_with('.')) {
-                inner(fs, entry, indent + 2, out);
-                if !fs
-                    .inode_cache
-                    .get(entry.inode(), &mut fs.block_device)
-                    .is_directory()
-                {
-                    let _ = writeln!(out, "{}{}", " ".repeat(indent as usize + 2), entry.name());
+            if entry_inode.is_directory() {
+                let child_prefix =
+                    alloc::format!("{}{}   ", prefix, if is_last { " " } else { "│" });
+                let children: Vec<DirEntry> = fs
+                    .read_dir_entry(entry.inode())
+                    .into_iter()
+                    .filter(|e| !e.name().starts_with('.'))
+                    .collect();
+                let count = children.len();
+                for (i, child) in children.iter().enumerate() {
+                    inner(fs, child, &child_prefix, i == count - 1, out);
                 }
             }
         }
 
-        let root_entries = self.read_dir_entry(INodeIndex::new(0));
-
-        for root_entry in root_entries.iter().filter(|e| !e.name().starts_with('.')) {
-            inner(self, root_entry, 0, out);
+        let _ = writeln!(out, "/");
+        let root_entries: Vec<DirEntry> = self
+            .read_dir_entry(INodeIndex::new(0))
+            .into_iter()
+            .filter(|e| !e.name().starts_with('.'))
+            .collect();
+        let count = root_entries.len();
+        for (i, entry) in root_entries.iter().enumerate() {
+            inner(self, entry, "", i == count - 1, out);
         }
     }
 
