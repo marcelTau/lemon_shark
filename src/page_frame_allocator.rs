@@ -1,6 +1,6 @@
 use crate::device_tree;
 use bitmap::Bitmap;
-use virtual_memory::{PhysAddr, PAGE_SIZE};
+use virtual_memory::{PAGE_SIZE, PhysAddr};
 
 static PAGE_FRAME_ALLOCATOR: spin::Mutex<Option<PageFrameAllocator>> = spin::Mutex::new(None);
 

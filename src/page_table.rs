@@ -1,6 +1,6 @@
 use core::arch::asm;
 
-use virtual_memory::{pte_flags, PageTable, VirtAddr, PAGE_SIZE};
+use virtual_memory::{PAGE_SIZE, PageTable, VirtAddr, pte_flags};
 
 use crate::page_frame_allocator;
 
@@ -75,7 +75,7 @@ pub fn init() {
     unsafe {
         asm!(
             "la t0, 1f",
-            "li t1, 0xFFFF_FFFF_0000_0000",
+            "li t1, 0xFFFFFFFF00000000",
             "add t0, t0, t1",
             "jalr zero, t0, 0",
             "1:"
