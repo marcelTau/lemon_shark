@@ -1,8 +1,7 @@
 /target
 .gdbinit
 kernel.log
-disk.img
+*.img
 *.pdf
-/.zed
 qemu.dtb
 device_tree.txt

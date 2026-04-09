@@ -231,7 +231,7 @@ impl ShellCommand {
             ShellCommand::SysInfo => sysinfo(),
             ShellCommand::MemoryDump => dump_memory(),
             ShellCommand::Bench { n, size } => benchmark_allocator(*n, *size),
-            Self::Allocate { size } => shell_allocate(*size),
+            ShellCommand::Allocate { size } => shell_allocate(*size),
             ShellCommand::Timer { secs } => crate::timer::new_time(*secs),
             ShellCommand::Ls { path: dir } => {
                 if let Err(e) = crate::filesystem::api::dump_dir(dir) {
