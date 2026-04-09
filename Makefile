@@ -24,7 +24,8 @@ debug: ARGS += -s -S
 debug: run
 
 fs:
-	rm lemonfs.img && cargo run -p mkfs --target x86_64-unknown-linux-gnu
+	rm lemonfs.img || true
+	cargo run -p mkfs --target x86_64-unknown-linux-gnu
 
 
 run:
