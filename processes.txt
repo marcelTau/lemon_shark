@@ -1,0 +1,34 @@
+Process implementation plan
+
+1. Currently we store the global trap stack in the `sscratch` register.
+
+   The idea now is to have a `TrapFrame` structure and have `sscrath` point to
+   the `TrapFrame` of the currently running process.
+
+   The first field in this struct should be the pointer to the trap stack for
+   this process.
+
+   - [ ] create `TrapFrame` struct which contains all registers + trap_stack_pointer
+   - [ ] the trap_stack_pointer can always point to the current
+         `_trap_stack_start` symbol as we're running on a single CPU. This means it's
+         not possible to context-switch out a process while it's handling a trap.
+   - [ ] make `sscratch` point to the current processes `TrapFrame`. This
+         should happen at the end of the trap_handler when we're switching context.
+
+2. Scheduler
+    The scheduler has to keep track of all running processes. It needs to know which
+    of the processes is running right now, and which one is the next process that will
+    be run.
+
+    - [ ] global scheduler struct, which the Trap handler uses when it receives
+          a time event.
+    - [ ] the algo here can be as simple as setting up the timer to fire once a second
+          and then swithing the process every time a timer event is received in the 
+          trap handler.
+    - [ ] populate the TrapFrame by storing the content of all the registers and
+          the pointer to the trap_stack.
+    - [ ] need to change the `satp` to point to the page table of the currently running
+          process. **Actually this is a thing for later, when we have userspace processes**.
+          Since right now everything is running as a kernel process they can all share the same
+          page table.
+    - [ ] perfect candidate for a shell command to list all processes and their statuses.

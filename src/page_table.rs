@@ -1,6 +1,6 @@
 use core::arch::asm;
 
-use virtual_memory::{PAGE_SIZE, PageTable, VirtAddr, pte_flags};
+use virtual_memory::{pte_flags, PageTable, VirtAddr, PAGE_SIZE};
 
 use crate::page_frame_allocator;
 
@@ -57,27 +57,26 @@ pub fn init() {
     // avoids flushing it on every context switch.
     let asid = 0;
 
-    let addr = &raw const KERNEL_PAGE_TABLE as usize;
-
-    log::error!(
-        "Kernel page table address = {}",
-        addr.is_multiple_of(PAGE_SIZE)
-    );
+    let kernel_page_table_addr = &raw const KERNEL_PAGE_TABLE as usize;
 
     // mode=0x8=Sv39
-    let satp = (0x8 << 60) | (asid << 44) | ((&raw const KERNEL_PAGE_TABLE) as usize >> 12);
-
-    unsafe {
-        asm!("csrw satp, {}", in(reg) satp);
-        asm!("sfence.vma");
-    }
+    let satp = (0x8_usize << 60) | (asid << 44) | (kernel_page_table_addr >> 12);
 
     unsafe {
         asm!(
-            "la t0, 1f",
+           "csrw satp, {satp}",
+           "sfence.vma",
+           satp = in(reg) satp
+        );
+    }
+
+    // Jump to the higher address space
+    unsafe {
+        asm!(
+            "la t0, 1f", // take address of label `1:` at the end of this block
             "li t1, 0xFFFFFFFF00000000",
-            "add t0, t0, t1",
-            "jalr zero, t0, 0",
+            "add t0, t0, t1",   // add the offset to it
+            "jalr zero, t0, 0", // jump there
             "1:"
         )
     }
