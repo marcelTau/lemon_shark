@@ -9,6 +9,8 @@ pub const PAGE_SIZE: usize = 4096;
 /// +---------+--------+--------+--------+-------------+
 /// |    0    | L2 idx | L1 idx | L0 idx | page offset |
 /// +---------+--------+--------+--------+-------------+
+///
+/// docs: https://www.scs.stanford.edu/~zyedidia/docs/riscv/riscv-privileged.pdf Section 4.4
 pub struct VirtAddr(pub usize);
 
 pub enum Level {
@@ -36,9 +38,6 @@ impl VirtAddr {
     }
 }
 
-/// Terminology
-/// PPN: Physical Page Number
-
 /// A page table entry always has the following format.
 ///
 /// 63           54 53        28 27        19 18        10 9     8 7 6 5 4 3 2 1 0
@@ -64,6 +63,8 @@ impl VirtAddr {
 ///
 /// The PPN take up 44 bits here, plus the lower 12 that we know are 0, this gives us 2^56 bytes
 /// address space.
+///
+/// docs: https://www.scs.stanford.edu/~zyedidia/docs/riscv/riscv-privileged.pdf Section 4.4
 pub struct PageTableEntry(usize);
 
 pub mod pte_flags {
@@ -177,7 +178,7 @@ impl PageTable {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::alloc::{Layout, alloc_zeroed};
+    use std::alloc::{alloc_zeroed, Layout};
 
     /// Allocate a single zeroed 4KB-aligned frame from the host allocator.
     fn alloc_test_frame() -> PhysAddr {

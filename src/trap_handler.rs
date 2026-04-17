@@ -6,6 +6,7 @@ use core::arch::naked_asm;
 /// Layout is fixed (`#[repr(C)]`) because the trap entry assembly addresses
 /// fields by hardcoded byte offsets. `kernel_sp` must remain at offset 0 —
 /// it is loaded first to switch to the kernel trap stack before any Rust code runs.
+#[derive(Clone, Copy)]
 #[repr(C)]
 pub struct TrapFrame {
     pub kernel_sp: usize, // offset 0   — loaded first to switch stacks
@@ -86,6 +87,11 @@ impl TrapFrame {
 /// `TrapFrame` for the initial kernel context (before any processes exist).
 /// `kernel_sp` is filled in by `init()`.
 static mut INITIAL_TRAP_FRAME: TrapFrame = TrapFrame::zero();
+
+/// TODO(mt): clean that up
+pub(crate) fn kernel_sp() -> usize {
+    unsafe { INITIAL_TRAP_FRAME.kernel_sp }
+}
 
 #[derive(Debug, PartialEq)]
 enum ScauseReason {
@@ -285,8 +291,6 @@ extern "C" fn trap_handler_rust(frame: *mut TrapFrame) {
     }
 
     let scause = Scause(scause);
-
-    log::info!("Trap: {scause:?}");
 
     match scause.reason() {
         ScauseReason::SupervisorTimerInterrupt => {

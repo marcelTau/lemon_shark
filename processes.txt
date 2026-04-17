@@ -8,7 +8,7 @@ Process implementation plan
    The first field in this struct should be the pointer to the trap stack for
    this process.
 
-   - [ ] create `TrapFrame` struct which contains all registers + trap_stack_pointer
+   - [x] create `TrapFrame` struct which contains all registers + trap_stack_pointer
    - [ ] the trap_stack_pointer can always point to the current
          `_trap_stack_start` symbol as we're running on a single CPU. This means it's
          not possible to context-switch out a process while it's handling a trap.
