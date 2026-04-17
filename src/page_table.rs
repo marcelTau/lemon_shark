@@ -1,18 +1,31 @@
 use core::arch::asm;
 
-use virtual_memory::{pte_flags, PageTable, VirtAddr, PAGE_SIZE};
+use virtual_memory::{pte_flags, PageTable, PhysAddr, VirtAddr, PAGE_SIZE};
 
-use crate::page_frame_allocator;
+use crate::{device_tree, page_frame_allocator};
 
 static mut KERNEL_PAGE_TABLE: PageTable = PageTable::new();
 
+/// Identity-maps a physical page into the kernel page table (virtual == physical).
+pub(crate) fn new_identity_map(phys: PhysAddr) {
+    let flags = pte_flags::READ | pte_flags::WRITE;
+    let alloc = || page_frame_allocator::alloc_frame().unwrap();
+    unsafe {
+        (*&raw mut KERNEL_PAGE_TABLE).map(VirtAddr(phys), phys, flags, alloc);
+        asm!("sfence.vma");
+    }
+}
+
 /// This initializes the kernel page table, identity mapping all kernel pages and pages used for
-/// MMIO.
+/// MMIO. We also identity map all RAM pages so that the kernel can reach them.
+///
+/// We also map the kernel pages to the upper half of the address space.
 ///
 /// NOTE: For now it's just mapping all kernel pages as READ | WRITE | EXECTUE.
 ///
 /// docs: https://www.scs.stanford.edu/~zyedidia/docs/riscv/riscv-privileged.pdf Section 4.1.11
 pub fn init() {
+    // TODO: extract these into a KernelLayout struct which can be passed around.
     unsafe extern "C" {
         static _kernel_end: u8;
     }
@@ -37,6 +50,17 @@ pub fn init() {
                 flags,
                 alloc,
             );
+        }
+    }
+
+    // Identity-map all remaining RAM (kernel_end..ram_end) so that frames
+    // returned by the page frame allocator are always accessible as virtual
+    // addresses — needed when map() allocates intermediate page table nodes.
+    let ram_end = device_tree::ram_base() + device_tree::total_memory();
+    for page in (kernel_end..ram_end).step_by(PAGE_SIZE) {
+        let flags = pte_flags::READ | pte_flags::WRITE;
+        unsafe {
+            (*&raw mut KERNEL_PAGE_TABLE).map(VirtAddr(page), page, flags, alloc);
         }
     }
 
