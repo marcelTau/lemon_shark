@@ -51,6 +51,12 @@ U-mode (user): applications
 - General purpose registers (GPRs) x0-x31 (other names for aN,tN ...)
     - like rax, rbx etc on x86
 
+* `a0` .. `a7`: are the arguments to function calls
+* `t0` .. `t6`: are temporary registers - **CALLER SAVED** (used for short lived storage or calculations)
+* `s0` .. `s11`: are **CALLEE SAVED** registers, use when values are needed across function calls
+* `ret` & `sret`: `ret` is used to return from a function call and jumps to address in `ra`.
+                  `sret` is used to return from a supervisor trap and jumps to `sepc`.
+
 - Control and Status Register (CSRs)
     - control CPU behaviour
     - store system state
