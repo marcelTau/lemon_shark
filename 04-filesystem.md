@@ -1,81 +1,74 @@
-# Filesystem
+# Filesystem - How to organize a block of memory into usable files
 
-We eventually want to be able to use a filesystem in our OS. Since using a real
-filesystem from inside QEMU is quite tricky we'll start by using a ramdisk which
-lives in memory inside of our binary.
+Before we start by adding a real disk as a persistant storage to our OS we can
+make our life simple by using a Ramdisk for now. The interface of `read_block`
+and `write_block` will be the same anyways and a ramdisk let's us test the
+logic first without persistant storage.
 
-## Ramdisk
+For the ramdisk we can just create a big block of static memory.
 
-To create a `Ramdisk` we just allocate a static array with a reasonable size.
-Let's choose 1MB.
+Now we have a big blob of memory. But how do we represent and address files in
+that blob.
 
-First we need to define how the filesystem should be represented in memory.
+First we need to define a structure to identify our filesystem and make sure
+it's a valid instance.
 
-Usually the memory is split into blocks. We can then either read or write those
-blocks. A common size to choose for a block is 512 bytes.
+# Superblock
 
-Now we can define a Layout of what blocks mean what. This metadata is usually
-written to a special block at `BlockIndex(0)` in memory called a `SuperBlock`.
+A `Superblock` contains metadata and general information about our filesystem.
+One piece of this metadata can be a magic value. When we read data from this
+filesystem during initalization we can read the magic and know if this is a
+filesystem that we know about or not.
 
-## Superblock
+We will add more and more information to the Superblock as we go on
+implementing the filesystem.
 
-The `SuperBlock` starts with a magic value that we can read to know that the
-following memory is following our layout.
+# INode
 
-For the sake of this project we'll be using `0x4e4f4d454c` as our magic value
-as it spells out `lemon`.
+We need a way to organize our files and directories. To start with we can say
+that directories are just files with a `is_directory` flag set. Other than that
+they behave in a same way for us so far.
 
-We already created the first piece of our layout with the superblock. Now we
-can define the rest of the blocks. The question is what kind of other blocks
-do we need to have a fully working filesystem.
+To store information about our files (not the data itself) we allocate a couple
+of pages at the beginning of our big blob of memory. We can use those blocks as
+an array of `INode`s. Each of the INodes is describing a file.
 
-## INode
-An `INode` is a descriptor that holds information about an entry in the
-filesystem. This can be a file or a directory.
+For now we can think of the inode as a descriptor of a file. It contains flags
+such as our `is_directory` flag, the size of the data and pointers to the
+data blocks of this file.
 
-For now, we can store the information wether this is a file or a directory,
-it's content and it's size.
+Later on we might add other flags to it, such as permissions etc. But for now
+this is enough.
 
-The should be enough to get started.
+# Data
 
-## Data blocks
-The `INode` points to some data blocks. This data has to be interpreted
-differently depending on the `is_directory` flag on the `INode`. If this flag
-is true, we need to read those as directory entries. If not then it's just the
-raw content of the file.
+INodes are the descriptors of files but where does the actual content of a file
+or a directory live?
 
-## DirEntry
-A DirEntry is the structure that is written to the data blocks that a directory
-`INode` points to. For now it just contains a name and points to the inode for
-this object.
+The data also has to be stored somewhere in the big blob of memory. We've
+already allocate the first couple of blocks to store INodes and we don't really
+need anything else for now, so we can just use the rest of the available blocks
+as datablocks.
 
-## Layout
-Now we have all the building blocks we need to know to bulid a basic
-filesystem!
+Now I already told you that our INode is holding some pointers to the data blocks.
+Those are basically just indexes into our array of data blocks that is right after
+our array of INode blocks in the big blob of memory.
 
-We can define out layout as such 
+An important thing to mention here is that a block always has to be assigned to
+a single file. It's not possible for a block to contain data from multiple
+files.
 
-```
-+------------+
-| Superblock |
-+------------+
-|   INodes   |
-+------------+
-|    Data    |
-+------------+
-```
+Now the question is how do we represent the data of files (or directories) in our
+data blocks.
 
-## How does this work now.
+This is the only other place where the handling is different between files and
+directories. For files that is quite simple as we just write the content of the
+file to a block and thats it.
 
-Each entry in the root (`/`) directory has a `DirEntry` in the root data blocks.
-Each of those contains a pointer to an `INode` and a name. The `INode` contains
-the metadata about this entry for example if it's a file or a directory.
+For directories we write `DirEntry`s to the datablock. You might have noticed that
+the inode doesn't contain the name of the file. This is where the DirEntry comes
+to play. A DirEntry consist of a pointer to an INode and a fixed size name. For
+this OS we can choose something relatively small as it reduces the size of the
+DirEntry.
 
-Now we have enough to create files and directories. To write to a file, we just
-need to write to it's data blocks.
-
-This means we can write a simple `ls` or `tree` command in our shell.
-
-## Deletion ...
-
-## Flushing ...
+And thats our basic building blocks for our filesystem.
