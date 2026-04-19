@@ -1,6 +1,8 @@
 use core::arch::asm;
 use core::arch::naked_asm;
 
+use crate::KernelLayout;
+
 /// Saved state of a process at the point it was interrupted.
 ///
 /// Layout is fixed (`#[repr(C)]`) because the trap entry assembly addresses
@@ -314,13 +316,9 @@ extern "C" fn trap_handler_rust(frame: *mut TrapFrame) {
 /// `sscratch` at it. `kernel_sp` is set to `_trap_stack_top` — the same
 /// known-good stack used before, now stored in the frame instead of directly
 /// in `sscratch`.
-fn setup_trap_frame() {
-    unsafe extern "C" {
-        static _trap_stack_top: u8;
-    }
-
+fn setup_trap_frame(layout: KernelLayout) {
     unsafe {
-        INITIAL_TRAP_FRAME.kernel_sp = &_trap_stack_top as *const u8 as usize;
+        INITIAL_TRAP_FRAME.kernel_sp = layout.trap_stack_top;
         let frame_addr = &raw const INITIAL_TRAP_FRAME as usize;
         asm!("csrw sscratch, {}", in(reg) frame_addr);
     }
@@ -338,8 +336,8 @@ fn setup_trap_handler() {
 
 /// Initializes the trap handler by writing the address of the `trap_handler` to the `stvec`
 /// register.
-pub fn init() {
-    setup_trap_frame();
+pub fn init(layout: KernelLayout) {
+    setup_trap_frame(layout);
     setup_trap_handler();
 
     log::info!("initialized");

@@ -27,6 +27,41 @@ use crate::allocator::LockedAllocator;
 
 use core::panic::PanicInfo;
 
+/// This abstraction reads the addresses of all used linker-inserted labels that the kernel needs
+/// for orientation once in the beginning instead of having unsafe functions that assume that those
+/// labels exist down the line. This also makes testing a lot easier.
+#[derive(Copy, Clone, Debug)]
+pub struct KernelLayout {
+    kernel_start: usize,
+    kernel_end: usize,
+    heap_start: usize,
+    heap_end: usize,
+    trap_stack_top: usize,
+}
+
+impl KernelLayout {
+    /// SAFETY: This function requires a specific set of valid labels to be set in place by the
+    /// linker.
+    pub unsafe fn from_lables() -> Self {
+        unsafe extern "C" {
+            static _kernel_end: u8;
+            static _heap_start: u8;
+            static _heap_end: u8;
+            static _trap_stack_top: u8;
+        }
+
+        unsafe {
+            Self {
+                kernel_start: 0x80200000, // took from linker.ld
+                kernel_end: &_kernel_end as *const u8 as usize,
+                heap_start: &_heap_start as *const u8 as usize,
+                heap_end: &_heap_end as *const u8 as usize,
+                trap_stack_top: &_trap_stack_top as *const u8 as usize,
+            }
+        }
+    }
+}
+
 /// This panic handler is used by the kernel and the tests.
 #[panic_handler]
 fn panic_handler(info: &PanicInfo) -> ! {
