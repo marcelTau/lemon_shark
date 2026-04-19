@@ -4,6 +4,8 @@
 #![test_runner(dt_test_runner)]
 #![reexport_test_harness_main = "test_main"]
 
+mod common;
+
 use core::arch::global_asm;
 use lemon_shark::{ALLOCATOR, device_tree, println, trap_handler};
 
@@ -30,8 +32,10 @@ pub fn dt_test_runner(tests: &[&dyn lemon_shark::Testable]) {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn _start(_hartid: usize, fdt_addr: usize) -> ! {
-    trap_handler::init();
-    unsafe { ALLOCATOR.init() };
+    let layout = common::init_kernel_layout();
+
+    trap_handler::init(layout);
+    unsafe { ALLOCATOR.init(layout) };
     unsafe { FDT_ADDR = fdt_addr };
     test_main();
     loop {}

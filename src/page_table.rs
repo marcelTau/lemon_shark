@@ -2,7 +2,7 @@ use core::arch::asm;
 
 use virtual_memory::{PAGE_SIZE, PageTable, PhysAddr, VirtAddr, pte_flags};
 
-use crate::{device_tree, page_frame_allocator};
+use crate::{device_tree, kernel_layout::KernelLayout, page_frame_allocator};
 
 static mut KERNEL_PAGE_TABLE: PageTable = PageTable::new();
 
@@ -22,15 +22,10 @@ pub(crate) fn new_identity_map(phys: PhysAddr) {
 /// NOTE: For now it's just mapping all kernel pages as READ | WRITE | EXECTUE.
 ///
 /// docs: https://www.scs.stanford.edu/~zyedidia/docs/riscv/riscv-privileged.pdf Section 4.1.11
-pub fn init() {
-    // TODO: extract these into a KernelLayout struct which can be passed around.
-    unsafe extern "C" {
-        static _kernel_end: u8;
-    }
-
+pub fn init(kernel_layout: KernelLayout) {
     // defined in `linker.ld`
-    let kernel_start = 0x80200000;
-    let kernel_end = unsafe { &_kernel_end as *const u8 as usize };
+    let kernel_start = kernel_layout.kernel_start;
+    let kernel_end = kernel_layout.kernel_end;
 
     let upper_half_offset = 0xFFFF_FFFF_0000_0000_usize;
 
@@ -102,8 +97,6 @@ pub fn init() {
             "1:"
         )
     }
-
-    // map the kernel code to the higher half of the virtual address space
 
     log::info!("Kernel page table initialized");
 }

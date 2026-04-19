@@ -4,6 +4,8 @@
 #![test_runner(lemon_shark::test_runner)]
 #![reexport_test_harness_main = "test_main"]
 
+mod common;
+
 use core::arch::global_asm;
 
 use lemon_shark::allocator::{FreeListAllocator, HeapBounds};
@@ -21,7 +23,8 @@ global_asm!(
 /// it needs.
 #[unsafe(no_mangle)]
 pub extern "C" fn _start(_: usize, _: usize) -> ! {
-    trap_handler::init();
+    let layout = common::init_kernel_layout();
+    trap_handler::init(layout);
 
     test_main();
     loop {}
@@ -29,7 +32,7 @@ pub extern "C" fn _start(_: usize, _: usize) -> ! {
 
 fn make_alloc() -> FreeListAllocator {
     let mut alloc = FreeListAllocator::default();
-    let bounds = unsafe { HeapBounds::new() };
+    let bounds = common::heap_bounds();
     unsafe { alloc.init(bounds.start, bounds.end) };
     alloc
 }

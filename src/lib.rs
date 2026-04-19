@@ -11,6 +11,7 @@ pub mod allocator;
 pub mod device_tree;
 pub mod filesystem;
 pub mod interrupts;
+pub mod kernel_layout;
 pub mod klog;
 pub mod page_frame_allocator;
 pub mod page_table;

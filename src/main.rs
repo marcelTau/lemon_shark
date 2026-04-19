@@ -5,7 +5,9 @@ use core::arch::global_asm;
 use lemon_shark::{
     ALLOCATOR, device_tree,
     filesystem::{self, KernelBlockDevice},
-    interrupts, page_frame_allocator, page_table, println, shell, timer, trap_handler, virtio2,
+    interrupts,
+    kernel_layout::KernelLayout,
+    logo, page_frame_allocator, page_table, println, shell, timer, trap_handler, virtio2,
 };
 
 // This is the section that we mapped first in the linker script `linker.ld`
@@ -25,18 +27,20 @@ global_asm!(
 // #[cfg(not(test))]
 #[unsafe(no_mangle)]
 extern "C" fn _start(_: usize, device_table_addr: usize) -> ! {
-    unsafe { ALLOCATOR.init() };
+    let kernel_layout = unsafe { KernelLayout::from_labels() };
+
+    unsafe { ALLOCATOR.init(kernel_layout) };
 
     lemon_shark::klog::init();
     log::warn!("========== Kernel started ==========");
 
     virtio2::init_console();
-    trap_handler::init();
+    trap_handler::init(kernel_layout);
     device_tree::init(device_table_addr);
     interrupts::init();
 
-    page_frame_allocator::init();
-    page_table::init();
+    page_frame_allocator::init(kernel_layout);
+    page_table::init(kernel_layout);
 
     crate::timer::new_time(1);
 

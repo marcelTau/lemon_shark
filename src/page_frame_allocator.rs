@@ -1,4 +1,4 @@
-use crate::device_tree;
+use crate::{device_tree, kernel_layout::KernelLayout};
 use bitmap::Bitmap;
 use virtual_memory::{PAGE_SIZE, PhysAddr};
 
@@ -11,20 +11,9 @@ struct PageFrameAllocator {
 }
 
 impl PageFrameAllocator {
-    /// Creates a new `PageFrameAllocator`.
-    ///
-    /// # SAFETY
-    ///
-    /// Requires the `_kernel_end` symbol to be page aligned and pointing to the address right
-    /// after the kernels binary in usused RAM.
-    unsafe fn new() -> Self {
-        unsafe extern "C" {
-            static _kernel_end: u8;
-        }
-        let size = device_tree::total_memory();
-
-        let kernel_end = unsafe { &_kernel_end as *const u8 as usize };
-        let ram_end = device_tree::ram_base() + size;
+    fn new(layout: KernelLayout) -> Self {
+        let kernel_end = layout.kernel_end;
+        let ram_end = device_tree::ram_base() + device_tree::total_memory();
 
         let num_pages = (ram_end - kernel_end) / PAGE_SIZE;
 
@@ -60,14 +49,12 @@ pub fn free_frame(addr: PhysAddr) {
     PAGE_FRAME_ALLOCATOR.lock().as_mut().unwrap().free(addr)
 }
 
-pub fn init() {
-    unsafe {
-        let mut alloc = PAGE_FRAME_ALLOCATOR.lock();
+pub fn init(layout: KernelLayout) {
+    let mut alloc = PAGE_FRAME_ALLOCATOR.lock();
 
-        if alloc.is_none() {
-            alloc.replace(PageFrameAllocator::new());
-        } else {
-            log::error!("Tried to intitalized PageFrameAllocator twice");
-        }
+    if alloc.is_none() {
+        alloc.replace(PageFrameAllocator::new(layout));
+    } else {
+        log::error!("Tried to intitalized PageFrameAllocator twice");
     }
 }

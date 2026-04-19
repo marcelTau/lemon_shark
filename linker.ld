@@ -5,6 +5,7 @@ ENTRY(_boot)
 SECTIONS
 {
     . = 0x80200000;
+    _kernel_start = .;
 
     .text : {
         *(.text.boot)
