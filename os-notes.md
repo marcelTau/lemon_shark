@@ -59,8 +59,11 @@ U-mode (user): applications
 `stvec`: jump to that address when trap occures
 `satp`: page table pointer
 `mepc`: "machine exception program counter"
-`sepc`: "Supervisor exception program counter" contains PC when exception is thrown
+`sepc`: "Supervisor exception program counter" contains PC when exception is
+         thrown
 `scause`: exception cause
+`sret`: supervisor return, used to return from a trap by jumping to sepc, we
+        also use it to jump to the init process.
 
 `csr{r,w,s,c}` CSR instructions to read/write/set bit/clear bits
 `csrrw` Swaps atomically

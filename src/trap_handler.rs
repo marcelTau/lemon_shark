@@ -1,6 +1,7 @@
 use core::arch::asm;
 use core::arch::naked_asm;
 
+use crate::scheduler;
 use crate::KernelLayout;
 
 /// Saved state of a process at the point it was interrupted.
@@ -296,7 +297,14 @@ extern "C" fn trap_handler_rust(frame: *mut TrapFrame) {
 
     match scause.reason() {
         ScauseReason::SupervisorTimerInterrupt => {
-            crate::timer::new_time(1);
+            let new_frame = scheduler::next(frame);
+            unsafe {
+                asm!(
+                "csrw sscratch, {}",
+                "sfence.vma",
+                in(reg) new_frame as usize)
+            }
+            crate::timer::new_time_ms(10);
         }
         ScauseReason::Breakpoint => unsafe {
             let sepc = (*frame).sepc;

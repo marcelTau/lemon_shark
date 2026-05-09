@@ -3,9 +3,10 @@
 
 use core::arch::global_asm;
 use lemon_shark::{
-    ALLOCATOR, KernelLayout, device_tree,
+    device_tree,
     filesystem::{self, KernelBlockDevice},
-    interrupts, page_frame_allocator, page_table, println, shell, timer, trap_handler, virtio2,
+    interrupts, page_frame_allocator, page_table, println, scheduler, shell, timer, trap_handler,
+    virtio2, KernelLayout, ALLOCATOR,
 };
 
 // This is the section that we mapped first in the linker script `linker.ld`
@@ -41,7 +42,7 @@ extern "C" fn _start(_: usize, device_table_addr: usize) -> ! {
     page_frame_allocator::init(kernel_layout);
     page_table::init(kernel_layout);
 
-    crate::timer::new_time(1);
+    crate::timer::new_time_ms(10);
 
     let virtio_device = virtio2::make_device();
     filesystem::init_with_device(KernelBlockDevice::VirtIO(virtio_device));
@@ -53,7 +54,36 @@ extern "C" fn _start(_: usize, device_table_addr: usize) -> ! {
         timer::uptime_ms()
     );
 
-    shell::shell()
+    scheduler::init_with_shell(shell::shell);
+    scheduler::spawn(second_process);
+    scheduler::spawn(third_process);
+    scheduler::start()
+}
+
+fn second_process() {
+    let mut i = 0u64;
+
+    loop {
+        log::info!("[process 2] tick {i}");
+        i += 1;
+        // busy-wait so we don't spam too fast
+        for _ in 0..5_000_000 {
+            core::hint::spin_loop();
+        }
+    }
+}
+
+fn third_process() {
+    let mut i = 0u64;
+
+    loop {
+        log::info!("[process 3] tick {i}");
+        i += 1;
+        // busy-wait so we don't spam too fast
+        for _ in 0..5_000_000 {
+            core::hint::spin_loop();
+        }
+    }
 }
 
 fn print_welcome() {

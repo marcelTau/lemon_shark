@@ -154,6 +154,7 @@ enum ShellCommand {
     Rm { path: String },
     Tree,
     Flush,
+    Ps,
 }
 
 impl ShellCommand {
@@ -217,6 +218,7 @@ impl ShellCommand {
                 let path = normalize_root_path(parts.get(1)?);
                 ShellCommand::Cat { path }
             }
+            "ps" => ShellCommand::Ps,
             _ => return None,
         };
 
@@ -275,13 +277,20 @@ impl ShellCommand {
             ShellCommand::Flush => {
                 crate::filesystem::api::flush();
             }
+            ShellCommand::Ps => {
+                println!("{:<6} {}", "PID", "STATUS");
+                for p in crate::scheduler::list() {
+                    let status = if p.running { "running" } else { "waiting" };
+                    println!("{:<6} {}", p.id, status);
+                }
+            }
         }
     }
 }
 
 /// This spawns a simple shell which let's the user input some commands
 /// and reads from the UART and outputs something based on the command.
-pub fn shell() -> ! {
+pub fn shell() {
     loop {
         let line = read_line_and_display();
 

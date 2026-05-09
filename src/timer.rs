@@ -1,13 +1,16 @@
 use core::arch::asm;
 
-/// Helper function that creates a timer for 1 second using the frequency read
-/// from the device tree.
 pub fn new_time(secs: usize) {
+    new_time_ms(secs * 1000);
+}
+
+/// Set a timer to fire after `ms` milliseconds.
+pub fn new_time_ms(ms: usize) {
     // TODO(mt): create a mapping for functions in sbi module.
     const TIME_FN: usize = 0x54494D45;
     let freq = crate::device_tree::timer_frequency();
 
-    let time = freq * secs;
+    let time = freq / 1000 * ms;
 
     unsafe {
         asm!(

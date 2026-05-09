@@ -9,10 +9,10 @@ Process implementation plan
    this process.
 
    - [x] create `TrapFrame` struct which contains all registers + trap_stack_pointer
-   - [ ] the trap_stack_pointer can always point to the current
+   - [x] the trap_stack_pointer can always point to the current
          `_trap_stack_start` symbol as we're running on a single CPU. This means it's
          not possible to context-switch out a process while it's handling a trap.
-   - [ ] make `sscratch` point to the current processes `TrapFrame`. This
+   - [x] make `sscratch` point to the current processes `TrapFrame`. This
          should happen at the end of the trap_handler when we're switching context.
 
 2. Scheduler
@@ -20,15 +20,25 @@ Process implementation plan
     of the processes is running right now, and which one is the next process that will
     be run.
 
-    - [ ] global scheduler struct, which the Trap handler uses when it receives
+    - [x] global scheduler struct, which the Trap handler uses when it receives
           a time event.
-    - [ ] the algo here can be as simple as setting up the timer to fire once a second
-          and then swithing the process every time a timer event is received in the 
+    - [x] the algo here can be as simple as setting up the timer to fire once a second
+          and then swithing the process every time a timer event is received in the
           trap handler.
-    - [ ] populate the TrapFrame by storing the content of all the registers and
+    - [x] populate the TrapFrame by storing the content of all the registers and
           the pointer to the trap_stack.
-    - [ ] need to change the `satp` to point to the page table of the currently running
+    - [x] need to change the `satp` to point to the page table of the currently running
           process. **Actually this is a thing for later, when we have userspace processes**.
           Since right now everything is running as a kernel process they can all share the same
           page table.
     - [ ] perfect candidate for a shell command to list all processes and their statuses.
+
+
+
+ - [x] Create TrapFrame
+ - [x] Initialize Kernel TrapFrame
+ - [x] Modify trap handler to store current TrapFrame
+ - [x] Scheduler should be called from timer interrupt
+ - [x] scheduler needs to replace the current sscratch register
+ - [x] need to make sure the TLB is flushed - `sfence.vma`
+

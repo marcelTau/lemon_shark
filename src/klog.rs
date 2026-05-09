@@ -1,4 +1,5 @@
 extern crate alloc;
+use crate::scheduler;
 use alloc::vec::Vec;
 
 static EARLY_BUF: spin::Mutex<EarlyBuffer> = spin::Mutex::new(EarlyBuffer::new());
@@ -54,6 +55,8 @@ fn module_prefix(target: &str) -> &str {
         "timer"
     } else if target.starts_with("lemon_shark::klog") {
         "klog"
+    } else if target.starts_with("lemon_shark::scheduler") {
+        "scheduler"
     } else {
         target.trim_start_matches("lemon_shark::")
     }
@@ -76,13 +79,17 @@ impl log::Log for KernelLogger {
             log::Level::Warn => ("\x1b[33m", "\x1b[0m"),
             _ => ("", ""),
         };
+
+        let pid = scheduler::current_pid();
+
         // Level is at most 5 chars (DEBUG). Label padded to 8 chars for alignment.
         let _ = writeln!(
             buf,
-            "{}[{:<5} {:<8}] {}{}",
+            "{}[{:<5} {:<8} ({})] {}{}",
             pre,
             record.level(),
             label,
+            pid,
             record.args(),
             post,
         );
