@@ -201,7 +201,7 @@ impl ShellCommand {
                 ShellCommand::Rm { path }
             }
             "ls" => {
-                let dir = normalize_root_path(parts.get(1)?);
+                let dir = normalize_root_path(parts.get(1).unwrap_or_else(|| &"."));
                 ShellCommand::Ls { path: dir }
             }
             "dumpfs" => ShellCommand::DumpFs,
