@@ -96,7 +96,11 @@ impl LockedSystemInfo {
     }
 
     fn inner(&self) -> &SystemInfo {
-        unsafe { (*self.inner.get()).as_ref().unwrap() }
+        unsafe {
+            (*self.inner.get())
+                .as_ref()
+                .expect("device tree accessed before device_tree::init()")
+        }
     }
 }
 
@@ -170,7 +174,7 @@ impl SystemInfo {
         // }
         // }
 
-        let isa = cpu.properties().find(|p| p.name.starts_with("riscv,isa"));
+        let isa = cpu.properties().find(|p| p.name == "riscv,isa");
         let value = isa.unwrap().value;
         let str_value = alloc::string::String::from_utf8(value.to_vec()).unwrap();
         let (base_isa, _) = str_value.split_once('_').unwrap();

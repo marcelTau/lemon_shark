@@ -3,9 +3,10 @@
 
 use core::arch::global_asm;
 use lemon_shark::{
-    ALLOCATOR, device_tree,
+    device_tree,
     filesystem::{self, KernelBlockDevice},
     interrupts, page_frame_allocator, page_table, println, shell, timer, trap_handler, virtio2,
+    ALLOCATOR,
 };
 
 // This is the section that we mapped first in the linker script `linker.ld`
@@ -22,7 +23,7 @@ global_asm!(
     "   call _start",
 );
 
-#[cfg(not(test))]
+// #[cfg(not(test))]
 #[unsafe(no_mangle)]
 extern "C" fn _start(_: usize, device_table_addr: usize) -> ! {
     unsafe { ALLOCATOR.init() };
@@ -32,9 +33,8 @@ extern "C" fn _start(_: usize, device_table_addr: usize) -> ! {
 
     virtio2::init_console();
     trap_handler::init();
-    interrupts::init();
-
     device_tree::init(device_table_addr);
+    interrupts::init();
 
     page_frame_allocator::init();
     page_table::init();

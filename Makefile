@@ -23,6 +23,17 @@ all: run
 debug: ARGS += -s -S
 debug: run
 
+generate_device_tree:
+		@$(QEMU) \
+			-machine virt,dumpdtb=qemu.dtb \
+			-bios default \
+			-cpu rv64 \
+			-display none
+
+		@dtc -I dtb -O dts -o qemu.dts qemu.dtb
+		@echo "Generated \`qemu.dts\`."
+		@rm qemu.dtb
+
 fs:
 	rm lemonfs.img || true
 	cargo run -p mkfs --target x86_64-unknown-linux-gnu
