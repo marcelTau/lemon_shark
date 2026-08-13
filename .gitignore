@@ -5,3 +5,5 @@ kernel.log
 *.pdf
 qemu.dtb
 device_tree.txt
+.codex
+qemu.dts
