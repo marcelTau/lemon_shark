@@ -8,9 +8,7 @@ use core::arch::global_asm;
 
 use lemon_shark::allocator::{FreeListAllocator, HeapBounds};
 use lemon_shark::println::UartWriter;
-use lemon_shark::{interrupts, trap_handler};
-
-use core::arch::asm;
+use lemon_shark::trap_handler;
 
 global_asm!(
     ".section .text.boot",
@@ -25,7 +23,6 @@ global_asm!(
 #[unsafe(no_mangle)]
 pub extern "C" fn _start(_: usize, _: usize) -> ! {
     trap_handler::init();
-    interrupts::init();
 
     test_main();
     loop {}
