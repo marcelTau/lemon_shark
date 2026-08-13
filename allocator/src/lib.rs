@@ -4,7 +4,7 @@ use core::alloc::Layout;
 use core::mem;
 use core::ops::ControlFlow;
 
-pub fn align_up(addr: usize, align: usize) -> usize {
+fn align_up(addr: usize, align: usize) -> usize {
     (addr + align - 1) & !(align - 1)
 }
 
@@ -275,9 +275,13 @@ impl FreeListAllocator {
             })
         };
 
-        result
-            .unwrap_or_else(|| panic!("Out of memory, requested {}kb", size / 1024))
-            .as_ptr()
+        match result {
+            Some(res) => res.as_ptr(),
+            None => {
+                log::error!("Out of memory, requested {}kb", size / 1024);
+                core::ptr::null_mut()
+            }
+        }
     }
 
     pub fn dealloc(&mut self, ptr: *mut u8, _layout: Layout) {
