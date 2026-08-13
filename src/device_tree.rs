@@ -1,28 +1,7 @@
-use core::{cell::UnsafeCell, str::FromStr};
+use core::str::FromStr;
 
 extern crate alloc;
 use alloc::string::String;
-
-/// The Device Tree Header sturcture is used to get the size of the actual
-/// device tree to be able to pass it to the `fdt` crate which parses it.
-///
-/// Find more information about the structure of the device tree
-/// [here](https://github.com/devicetree-org/devicetree-specification/releases/download/v0.4/devicetree-specification-v0.4.pdf)
-/// in Section 5.2
-#[derive(Debug)]
-#[repr(C)]
-struct FdtHeader {
-    magic: u32,
-    pub totalsize: u32,
-    off_dt_struct: u32,
-    off_dt_strings: u32,
-    off_mem_rsvmap: u32,
-    version: u32,
-    last_comp_version: u32,
-    boot_cpuid_phys: u32,
-    size_dt_strings: u32,
-    size_dt_struct: u32,
-}
 
 /*
  memory@80000000 {
@@ -47,62 +26,7 @@ struct FdtHeader {
     };
 */
 
-impl FdtHeader {
-    /// SAFETY: `ptr` must be valid and pointing to start of the device tree.
-    pub unsafe fn from_ptr(ptr: *const u8) -> Self {
-        let read_be_u32 = |offset: usize| -> u32 {
-            let bytes = unsafe { core::slice::from_raw_parts(ptr.add(offset), 4) };
-            u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
-        };
-
-        let magic = read_be_u32(0x0);
-
-        assert_eq!(magic, 0xd00dfeed);
-
-        Self {
-            magic,
-            totalsize: read_be_u32(0x04),
-            off_dt_struct: read_be_u32(0x08),
-            off_dt_strings: read_be_u32(0x0c),
-            off_mem_rsvmap: read_be_u32(0x10),
-            version: read_be_u32(0x14),
-            last_comp_version: read_be_u32(0x18),
-            boot_cpuid_phys: read_be_u32(0x1c),
-            size_dt_strings: read_be_u32(0x20),
-            size_dt_struct: read_be_u32(0x24),
-        }
-    }
-}
-
-static SYSINFO: spin::Mutex<LockedSystemInfo> = spin::Mutex::new(LockedSystemInfo::new());
-
-struct LockedSystemInfo {
-    inner: UnsafeCell<Option<SystemInfo>>,
-}
-
-impl LockedSystemInfo {
-    const fn new() -> Self {
-        Self {
-            inner: UnsafeCell::new(None),
-        }
-    }
-
-    fn init(&self, fdt_addr: usize) {
-        unsafe { (*self.inner.get()).replace(SystemInfo::new(fdt_addr)) };
-    }
-
-    fn is_some(&self) -> bool {
-        unsafe { (*self.inner.get()).is_some() }
-    }
-
-    fn inner(&self) -> &SystemInfo {
-        unsafe {
-            (*self.inner.get())
-                .as_ref()
-                .expect("device tree accessed before device_tree::init()")
-        }
-    }
-}
+static SYSINFO: spin::Once<SystemInfo> = spin::Once::new();
 
 #[derive(Debug)]
 struct SystemInfo {
@@ -111,21 +35,13 @@ struct SystemInfo {
     pub cpu_isa: String,
     pub ram_base: usize,
     pub total_memory: usize,
+    pub block_device_addr: usize,
 }
 
 impl SystemInfo {
     pub fn new(fdt_addr: usize) -> Self {
-        let ptr = fdt_addr as *const u8;
-
-        let size = {
-            let header = unsafe { FdtHeader::from_ptr(ptr) };
-            header.totalsize
-        };
-
-        let slice = unsafe { core::slice::from_raw_parts(ptr, size as usize) };
-        let fdt = fdt::Fdt::new(slice).expect("Could not read device tree");
-
-        let cpu = fdt.cpus().next().unwrap();
+        let fdt = unsafe { fdt::Fdt::from_ptr(fdt_addr as *const u8) }
+            .expect("Could not read device tree");
 
         // TODO(mt): Typically QEMU only has a single memory region. Also this region is placed
         // after the reserved-memory which means we can use all of it as RAM and divide it up into
@@ -144,86 +60,91 @@ impl SystemInfo {
             }
         }
 
-        // TODO(mt): read the values out of the device tree and make the virtio
-        // driver use them instead of hardcoding.
-        //
-        // for node in fdt.find_all_nodes("/soc/virtio_mmio") {
-        //     println!("{}", node.name);
-        // }
+        let mut block_device_addr = None;
 
-        // for node in fdt.all_nodes() {
-        // // Check if it's a VirtIO MMIO device
-        // if let Some(compatible) = node.compatible() {
-        //     if compatible.all().any(|s| s == "virtio,mmio") {
-        //         // Get its MMIO address
-        //         if let Some(mut reg) = node.reg() {
-        //             if let Some(region) = reg.next() {
-        //                 let addr = region.starting_address as usize;
-        //                 println!("Found virtio,mmio at 0x{:x}\n", addr);
+        for node in fdt.all_nodes() {
+            // Check if it's a VirtIO MMIO device
+            if let Some(compatible) = node.compatible() {
+                if compatible.all().any(|s| s == "virtio,mmio") {
+                    // Get its MMIO address
+                    if let Some(mut reg) = node.reg() {
+                        if let Some(region) = reg.next() {
+                            let addr = region.starting_address as usize;
+                            // Probe to see if it's a block device
+                            unsafe {
+                                let device_id =
+                                    core::ptr::read_volatile((addr + 0x008) as *const u32);
+                                if device_id == 2 {
+                                    block_device_addr = Some(addr);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
-        //                 // Probe to see if it's a block device
-        //                 unsafe {
-        //                     let device_id = core::ptr::read_volatile((addr + 0x008) as *const u32);
-        //                     if device_id == 2 {
-        //                         println!("  -> Block device!\n");
-        //                     }
-        //                 }
-        //             }
-        //         }
-        //     }
-        // }
-        // }
+        let cpu = fdt.cpus().next().expect("No CPU?");
 
         let isa = cpu.properties().find(|p| p.name == "riscv,isa");
-        let value = isa.unwrap().value;
-        let str_value = alloc::string::String::from_utf8(value.to_vec()).unwrap();
-        let (base_isa, _) = str_value.split_once('_').unwrap();
+        let value = isa.expect("No CPU ISA found").value;
+        let str_value = alloc::string::String::from_utf8(value.to_vec()).expect("Invalid CPU ISA");
+        let (base_isa, _) = str_value.split_once('_').expect("Invalid CPU ISA");
 
         SystemInfo {
             cpus: fdt.cpus().count(),
-            cpu_isa: String::from_str(base_isa).unwrap(),
+            cpu_isa: String::from_str(base_isa).expect("Invalid CPU ISA"),
             timer_frequency: fdt.cpus().next().expect("No cpu?").timebase_frequency(),
             ram_base,
             total_memory,
+            block_device_addr: block_device_addr.expect("No block device found"),
         }
     }
 }
 
 pub fn init(fdt_addr: usize) {
-    if SYSINFO.lock().is_some() {
+    if SYSINFO.get().is_some() {
         log::error!("Tried to re-initialize the system info struct");
         return;
     }
 
-    (*SYSINFO.lock()).init(fdt_addr);
+    SYSINFO.call_once(|| SystemInfo::new(fdt_addr));
     log::info!("initialized");
 }
 
+fn system_info() -> &'static SystemInfo {
+    SYSINFO
+        .get()
+        .expect("device tree accessed before device_tree::init()")
+}
+
 pub fn timer_frequency() -> usize {
-    SYSINFO.lock().inner().timer_frequency
+    system_info().timer_frequency
 }
 
 pub fn cpus() -> usize {
-    SYSINFO.lock().inner().cpus
+    system_info().cpus
 }
 
 pub fn ram_base() -> usize {
-    SYSINFO.lock().inner().ram_base
+    system_info().ram_base
 }
 
 pub fn total_memory() -> usize {
-    SYSINFO.lock().inner().total_memory
+    system_info().total_memory
 }
 
 pub fn cpu_isa() -> String {
-    SYSINFO.lock().inner().cpu_isa.clone()
+    system_info().cpu_isa.clone()
+}
+
+pub fn block_device_addr() -> usize {
+    system_info().block_device_addr
 }
 
 pub fn virtio_mmio_devices(fdt_addr: usize) -> alloc::vec::Vec<usize> {
-    let ptr = fdt_addr as *const u8;
-    let size = unsafe { FdtHeader::from_ptr(ptr) }.totalsize as usize;
-    let slice = unsafe { core::slice::from_raw_parts(ptr, size) };
-    let fdt = fdt::Fdt::new(slice).expect("Could not read device tree");
+    let fdt =
+        unsafe { fdt::Fdt::from_ptr(fdt_addr as *const u8) }.expect("Could not read device tree");
 
     let mut devices = alloc::vec::Vec::new();
 
