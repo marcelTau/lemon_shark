@@ -271,6 +271,8 @@ impl FreeListAllocator {
         match result {
             Some(res) => res.as_ptr(),
             None => {
+                // This runs while the allocator is locked. The kernel logger must remain
+                // allocation-free and non-blocking to avoid recursive allocation or deadlock.
                 log::error!("Out of memory, requested {}kb", size / 1024);
                 core::ptr::null_mut()
             }
@@ -300,7 +302,6 @@ impl FreeListAllocator {
         }
 
         if self.head.is_none() {
-            log::trace!("Head is none!");
             self.head = Some(new_block);
             return;
         }
@@ -502,6 +503,16 @@ mod tests {
 
         alloc.dealloc(ptr, layout);
         assert_eq!(alloc.free(), initial_free_bytes);
+    }
+
+    #[test]
+    fn allocator_returns_null_when_out_of_memory() {
+        let mut alloc = make_alloc();
+        let layout = Layout::from_size_align(HEAP_SIZE + 1, 1).unwrap();
+
+        let ptr = alloc.alloc(layout);
+
+        assert!(ptr.is_null());
     }
 
     #[test]
