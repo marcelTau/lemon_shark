@@ -1,11 +1,11 @@
 use virtio_drivers::device::blk::VirtIOBlk;
 use virtio_drivers::device::console::VirtIOConsole;
-use virtio_drivers::transport::mmio::{MmioTransport, VirtIOHeader};
 use virtio_drivers::transport::Transport;
-use virtio_drivers::{BufferDirection, Hal, PhysAddr, PAGE_SIZE};
+use virtio_drivers::transport::mmio::{MmioTransport, VirtIOHeader};
+use virtio_drivers::{BufferDirection, Hal, PAGE_SIZE, PhysAddr};
 
 extern crate alloc;
-use alloc::alloc::{alloc_zeroed, dealloc, Layout};
+use alloc::alloc::{Layout, alloc_zeroed, dealloc};
 
 use crate::device_tree;
 

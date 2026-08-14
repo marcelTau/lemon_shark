@@ -178,7 +178,7 @@ impl PageTable {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::alloc::{alloc_zeroed, Layout};
+    use std::alloc::{Layout, alloc_zeroed};
 
     /// Allocate a single zeroed 4KB-aligned frame from the host allocator.
     fn alloc_test_frame() -> PhysAddr {
