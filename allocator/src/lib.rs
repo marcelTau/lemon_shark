@@ -100,6 +100,12 @@ pub struct FreeListAllocator {
     pub head: Option<AlignedPtr<FreeBlock>>,
 }
 
+// SAFETY: The manual implementation is necessary as the `FreeListAllocator`
+// holds raw pointers which do not implement `Send`. We can guarantee safety
+// as the pointers remain valid even after moving exclusive ownership to
+// another thread.
+unsafe impl Send for FreeListAllocator {}
+
 impl FreeListAllocator {
     /// Initialize the allocator with an explicit heap range.
     ///
@@ -170,23 +176,21 @@ impl FreeListAllocator {
     /// The FreeBlock's in the list are all aligned.
     ///
     /// Because the DataPointer & Size are both aligned, the FreeBlock should be automatically aligned.
+    ///
+    /// INFO: This code runs when interrupts are disabled. Therefore it must
+    ///  - be kept as fast as possible
+    ///  - not allocate
+    ///  - not log or print
+    ///  - not panic
     pub fn alloc(&mut self, layout: Layout) -> *mut u8 {
         let align = layout.align().max(8);
         let size = align_up(layout.size(), 8);
-
-        log::trace!(
-            "[ALLOC] allocating {size} (req: {}) bytes with alignment {align} (req: {})",
-            layout.size(),
-            layout.align()
-        );
 
         let result = unsafe {
             Self::walk_list(self.head, |block, prev| {
                 let Some(aligned_ptr) = (*block.as_ptr()).can_allocate(align, size) else {
                     return ControlFlow::Continue(());
                 };
-
-                log::trace!("[ALLOC] Found block to allocate");
 
                 let block_ptr = *block.as_ptr();
 
@@ -200,14 +204,6 @@ impl FreeListAllocator {
 
                 let bytes_right =
                     (block.as_addr() + block_ptr.size) - (aligned_ptr.as_addr() + size);
-
-                if bytes_left >= required_size {
-                    log::trace!("[ALLOC] Splitting block to the left");
-                }
-
-                if bytes_right >= required_size {
-                    log::trace!("[ALLOC] Splitting block to the right");
-                }
 
                 let metadata = match (bytes_left >= required_size, bytes_right >= required_size) {
                     (false, false) => {
@@ -267,10 +263,7 @@ impl FreeListAllocator {
                     }
                 };
 
-                log::trace!("[ALLOC] AllocationMetaData: {metadata:#0x?}");
-
                 aligned_ptr.write_metadata(metadata);
-                log::trace!("[ALLOC] wrote metadata");
                 ControlFlow::Break(aligned_ptr)
             })
         };
@@ -284,6 +277,11 @@ impl FreeListAllocator {
         }
     }
 
+    /// INFO: This code runs when interrupts are disabled. Therefore it must
+    ///  - be kept as fast as possible
+    ///  - not allocate
+    ///  - not log or print
+    ///  - not panic
     pub fn dealloc(&mut self, ptr: *mut u8, _layout: Layout) {
         // Don't re-align! The ptr is already the aligned address we returned from alloc()
         let aligned_ptr: AlignedPtr<u8> = AlignedPtr(ptr);
@@ -295,8 +293,6 @@ impl FreeListAllocator {
         };
 
         let new_block: AlignedPtr<FreeBlock> = AlignedPtr::new(start_addr);
-
-        log::trace!("[ALLOC] deallocating {size} bytes at {start_addr:#x}",);
 
         unsafe {
             (*new_block.as_ptr()).size = size;
@@ -313,11 +309,6 @@ impl FreeListAllocator {
             let head = self.head.unwrap();
 
             if start_addr < head.as_addr() {
-                log::trace!(
-                    "start_addr={start_addr} size={size} head={:#x?} diff={}",
-                    head.as_addr(),
-                    head.as_addr() - (start_addr + size),
-                );
                 if start_addr + size == head.as_addr() {
                     (*new_block.as_ptr()).size += (*head.as_ptr()).size;
                     (*new_block.as_ptr()).next = (*head.as_ptr()).next;
@@ -343,12 +334,6 @@ impl FreeListAllocator {
 
             let merge_left = (prev.as_addr()) + (*prev.as_ptr()).size == start_addr;
             let merge_right = next.is_some_and(|next| start_addr + size == next.as_addr());
-
-            log::trace!(
-                "[ALLOC] merge_left: {}, merge_right: {}",
-                merge_left,
-                merge_right
-            );
 
             match (merge_left, merge_right) {
                 (true, true) => {

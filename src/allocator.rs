@@ -1,8 +1,8 @@
 use core::alloc::{GlobalAlloc, Layout};
-use core::cell::UnsafeCell;
 
 pub use allocator::FreeListAllocator;
 
+use crate::interrupts;
 use crate::println::UartWriter;
 
 pub struct HeapBounds {
@@ -33,15 +33,13 @@ impl HeapBounds {
 
 #[derive(Default)]
 pub struct LockedAllocator {
-    inner: UnsafeCell<FreeListAllocator>,
+    inner: spin::Mutex<FreeListAllocator>,
 }
-
-unsafe impl Sync for LockedAllocator {}
 
 impl LockedAllocator {
     pub const fn new() -> Self {
         Self {
-            inner: UnsafeCell::new(FreeListAllocator {
+            inner: spin::Mutex::new(FreeListAllocator {
                 head: None,
                 #[cfg(feature = "stats")]
                 stats: AllocationStats::new(),
@@ -54,21 +52,27 @@ impl LockedAllocator {
     /// SAFETY: Must be called exactly once before any allocation.
     pub unsafe fn init(&self) {
         let bounds = unsafe { HeapBounds::new() };
-        unsafe { (*self.inner.get()).init(bounds.start, bounds.end) };
+        unsafe { (*self.inner.lock()).init(bounds.start, bounds.end) };
     }
 
-    pub unsafe fn dump_state(&self) {
+    pub fn dump_state(&self) {
         let mut writer = UartWriter;
-        unsafe { (*self.inner.get()).dump_state(&mut writer) };
+        (*self.inner.lock()).dump_state(&mut writer);
     }
 }
 
 unsafe impl GlobalAlloc for LockedAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        unsafe { (*self.inner.get()).alloc(layout) }
+        interrupts::without_interrupts(|| {
+            let mut allocator = self.inner.lock();
+            (*allocator).alloc(layout)
+        })
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        unsafe { (*self.inner.get()).dealloc(ptr, layout) }
+        interrupts::without_interrupts(|| {
+            let mut allocator = self.inner.lock();
+            (*allocator).dealloc(ptr, layout)
+        })
     }
 }
