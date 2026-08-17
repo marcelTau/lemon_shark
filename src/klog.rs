@@ -1,8 +1,9 @@
 extern crate alloc;
-use alloc::vec::Vec;
 
 static EARLY_BUF: spin::Mutex<EarlyBuffer> = spin::Mutex::new(EarlyBuffer::new());
 
+// Buffers messages during logging while the `virtio console device` is not
+// initialized.
 struct EarlyBuffer {
     buf: [u8; 2048],
     len: usize,
@@ -18,19 +19,23 @@ impl EarlyBuffer {
 
     fn append(&mut self, bytes: &[u8]) {
         let len = bytes.len();
+
+        if self.len + len > 2048 {
+            return;
+        }
+
         self.buf[self.len..self.len + len].copy_from_slice(bytes);
         self.len += len;
     }
 
-    fn inner(&self) -> Vec<u8> {
-        Vec::from(&self.buf[..])
+    fn as_bytes(&self) -> &[u8] {
+        &self.buf[..self.len]
     }
 }
 
+/// Flushes buffered log messages once `virtio console device` is initialized.
 pub fn flush_early_buffer() {
-    let vec = EARLY_BUF.lock().inner();
-
-    crate::virtio2::console_write(&vec);
+    crate::virtio2::console_write(EARLY_BUF.lock().as_bytes());
 }
 
 fn module_prefix(target: &str) -> &str {
