@@ -45,6 +45,9 @@ run:
 	@truncate -s 0 kernel.log
 	@$(QEMU) $(ARGS)
 
+check:
+	@cargo check
+
 test:
 	@cargo test
 	@cargo test -p allocator --target x86_64-unknown-linux-gnu
