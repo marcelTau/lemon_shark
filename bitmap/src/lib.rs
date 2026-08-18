@@ -1,74 +1,98 @@
 #![cfg_attr(not(test), no_std)]
 extern crate alloc;
+use alloc::boxed::Box;
 use alloc::vec;
 use alloc::vec::Vec;
+
+const BITS_PER_WORD: usize = u32::BITS as usize;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InvalidWordCount {
+    pub expected: usize,
+    pub actual: usize,
+}
 
 /// A simple bitmap implemented ontop of u32's.
 #[derive(Debug, PartialEq, Clone, Default)]
 pub struct Bitmap {
-    arr: Vec<u32>,
+    len: usize,
+    words: Box<[u32]>,
 }
 
 impl Bitmap {
-    pub fn new(bits: u32) -> Self {
-        assert!(
-            bits.is_multiple_of(32),
-            "`find_free` breaks if it's not a multiple of 32"
-        );
-        let word_count = bits.div_ceil(32);
-        Self {
-            arr: vec![0; word_count as usize],
+    /// Create a new `Bitmap` which holds up to `len` bits.
+    pub fn new(len: usize) -> Self {
+        let word_count = len.div_ceil(BITS_PER_WORD);
+        let words = vec![0u32; word_count].into_boxed_slice();
+
+        Self { len, words }
+    }
+
+    /// Create a bitmap from exactly enough raw words to represent `len` bits.
+    pub fn from_words(len: usize, words: Vec<u32>) -> Result<Self, InvalidWordCount> {
+        let expected = len.div_ceil(BITS_PER_WORD);
+        if words.len() != expected {
+            return Err(InvalidWordCount {
+                expected,
+                actual: words.len(),
+            });
         }
+
+        let mut bitmap = Self {
+            len,
+            words: words.into_boxed_slice(),
+        };
+
+        // Bits beyond the logical end are padding, never allocatable bits.
+        if let (Some(last), remainder) = (bitmap.words.last_mut(), len % BITS_PER_WORD)
+            && remainder != 0
+        {
+            *last &= (1u32 << remainder) - 1;
+        }
+
+        Ok(bitmap)
     }
 
-    pub fn from_raw(arr: Vec<u32>) -> Self {
-        Self { arr }
+    pub fn len(&self) -> usize {
+        self.len
     }
 
-    pub fn words(&self) -> &[u32] {
-        &self.arr
+    /// Set the bit at `index`.
+    pub fn set(&mut self, index: usize) {
+        assert!(index < self.len, "Bitmap index {index} out of bounds");
+
+        let arr_index = index / BITS_PER_WORD;
+        let bit_index = index % BITS_PER_WORD;
+
+        self.words[arr_index] |= 1 << bit_index;
     }
 
-    pub fn set(&mut self, index: u32) {
-        debug_assert!(
-            index < self.arr.len() as u32 * 32,
-            "Bitmap index {index} out of bounds"
-        );
-        let arr_index = index / 32;
-        let bit_index = index % 32;
+    /// Unset the bit at `index`.
+    pub fn unset(&mut self, index: usize) {
+        assert!(index < self.len, "Bitmap index {index} out of bounds");
 
-        self.arr[arr_index as usize] |= 1 << bit_index;
+        let arr_index = index / BITS_PER_WORD;
+        let bit_index = index % BITS_PER_WORD;
+
+        self.words[arr_index] &= !(1 << bit_index);
     }
 
-    pub fn unset(&mut self, index: u32) {
-        debug_assert!(
-            index < self.arr.len() as u32 * 32,
-            "Bitmap index {index} out of bounds"
-        );
-        let arr_index = index / 32;
-        let bit_index = index % 32;
+    /// Test wether the bit at `index` is set or not.
+    pub fn is_set(&self, index: usize) -> bool {
+        assert!(index < self.len, "Bitmap index {index} out of bounds");
+        let arr_index = index / BITS_PER_WORD;
+        let bit_index = index % BITS_PER_WORD;
 
-        self.arr[arr_index as usize] &= !(1 << bit_index);
+        self.words[arr_index] & (1 << bit_index) > 0
     }
 
-    pub fn is_set(&self, index: u32) -> bool {
-        debug_assert!(
-            index < self.arr.len() as u32 * 32,
-            "Bitmap index {index} out of bounds"
-        );
-        let arr_index = index / 32;
-        let bit_index = index % 32;
-
-        self.arr[arr_index as usize] & (1 << bit_index) > 0
-    }
-
-    /// Find the first free block in the bitmap.
-    pub fn find_free(&self) -> Option<u32> {
-        for (arr_idx, bits) in self.arr.iter().enumerate() {
+    /// Find the first free bit in the bitmap.
+    pub fn find_free(&self) -> Option<usize> {
+        for (arr_idx, bits) in self.words.iter().enumerate() {
             if bits != &u32::MAX {
                 let res = (!bits).trailing_zeros();
-                log::debug!("find free found at {arr_idx} {res}");
-                return Some(arr_idx as u32 * 32 + res);
+                let index = arr_idx * BITS_PER_WORD + res as usize;
+                return (index < self.len).then_some(index);
             }
         }
 
@@ -76,8 +100,8 @@ impl Bitmap {
     }
 
     /// Returns an iterator over all set bits and unsets them.
-    pub fn drain_set(&mut self) -> impl Iterator<Item = u32> {
-        self.arr.iter_mut().enumerate().flat_map(|(idx, n)| {
+    pub fn drain_set(&mut self) -> impl Iterator<Item = usize> {
+        self.words.iter_mut().enumerate().flat_map(|(idx, n)| {
             core::iter::from_fn(move || {
                 if *n == 0 {
                     return None;
@@ -87,11 +111,13 @@ impl Bitmap {
 
                 *n &= !(1u32 << trailing);
 
-                let index = idx * 32 + trailing as usize;
-
-                Some(index as u32)
+                Some(idx * BITS_PER_WORD + trailing as usize)
             })
         })
+    }
+
+    pub fn as_words(&self) -> &[u32] {
+        &self.words
     }
 }
 
@@ -108,15 +134,9 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
-    fn new_rejects_non_multiple_of_32() {
-        Bitmap::new(33);
-    }
-
-    #[test]
     fn new_minimum_size() {
         let bitmap = Bitmap::new(32);
-        assert_eq!(bitmap.arr.len(), 1);
+        assert_eq!(bitmap.as_words().len(), 1);
     }
 
     #[test]
@@ -259,18 +279,18 @@ mod tests {
     #[test]
     fn drain_set_empty_yields_nothing() {
         let mut bitmap = Bitmap::new(64);
-        let result: Vec<u32> = bitmap.drain_set().collect();
+        let result: Vec<usize> = bitmap.drain_set().collect();
         assert!(result.is_empty());
     }
 
     #[test]
     fn drain_set_yields_all_set_indices() {
         let mut bitmap = Bitmap::new(64);
-        let indices = [0u32, 5, 31, 32, 63];
+        let indices = [0usize, 5, 31, 32, 63];
         for &i in &indices {
             bitmap.set(i);
         }
-        let mut result: Vec<u32> = bitmap.drain_set().collect();
+        let mut result: Vec<usize> = bitmap.drain_set().collect();
         result.sort();
         assert_eq!(result, indices);
     }
@@ -288,10 +308,10 @@ mod tests {
     #[test]
     fn drain_set_yields_in_ascending_order() {
         let mut bitmap = Bitmap::new(128);
-        for i in [63u32, 0, 100, 32, 7] {
+        for i in [63usize, 0, 100, 32, 7] {
             bitmap.set(i);
         }
-        let result: Vec<u32> = bitmap.drain_set().collect();
+        let result: Vec<usize> = bitmap.drain_set().collect();
         let mut sorted = result.clone();
         sorted.sort();
         assert_eq!(result, sorted);
@@ -303,10 +323,49 @@ mod tests {
         for i in 0..64 {
             bitmap.set(i);
         }
-        let result: Vec<u32> = bitmap.drain_set().collect();
-        assert_eq!(result, (0u32..64).collect::<Vec<_>>());
+        let result: Vec<usize> = bitmap.drain_set().collect();
+        assert_eq!(result, (0usize..64).collect::<Vec<_>>());
         for i in 0..64 {
             assert!(!bitmap.is_set(i));
+        }
+    }
+
+    #[test]
+    fn supports_all_boundary_lengths() {
+        for len in [0, 1, 31, 32, 33, 4096] {
+            let bitmap = Bitmap::new(len);
+            assert_eq!(bitmap.len(), len);
+            assert_eq!(bitmap.as_words().len(), len.div_ceil(32));
+            assert_eq!(bitmap.find_free(), (len != 0).then_some(0));
+        }
+    }
+
+    #[test]
+    fn from_words_rejects_invalid_word_counts() {
+        assert_eq!(
+            Bitmap::from_words(33, vec![0]).unwrap_err(),
+            InvalidWordCount {
+                expected: 2,
+                actual: 1
+            }
+        );
+        assert!(Bitmap::from_words(0, vec![0]).is_err());
+    }
+
+    #[test]
+    fn from_words_clears_final_word_padding() {
+        for len in [1, 31, 33] {
+            let bitmap = Bitmap::from_words(len, vec![u32::MAX; len.div_ceil(32)]).unwrap();
+            assert_eq!(bitmap.find_free(), None);
+            let remainder = len % 32;
+            assert_eq!(
+                bitmap.as_words().last().copied().unwrap(),
+                if remainder == 0 {
+                    u32::MAX
+                } else {
+                    (1u32 << remainder) - 1
+                }
+            );
         }
     }
 }
