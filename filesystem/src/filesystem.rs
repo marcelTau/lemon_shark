@@ -22,7 +22,7 @@
 extern crate alloc;
 use crate::bytereader::{ByteReader, ByteWriter, DiskFormat};
 use crate::dir_entry::DirEntry;
-use crate::inode::{INode, INODE_BLOCKS};
+use crate::inode::{INODE_BLOCKS, INode};
 use crate::inode_cache::INodeCache;
 use crate::layout::Layout;
 use crate::{BlockIndex, INodeIndex};
@@ -1012,7 +1012,9 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
     }
 
     pub fn flush(&mut self) {
-        // Write the `INodeCache` to disk
+        // Write the `INodeCache` to disk.
+        //
+        // Quick hack here to be able to call `write_inode_to_disk`.
         let mut inode_cache = core::mem::take(&mut self.inode_cache);
 
         for (idx, inode) in inode_cache.drain() {
@@ -1963,6 +1965,17 @@ mod tests {
             after < before,
             "data bitmap should have fewer bits set after remove (before={before}, after={after})"
         );
+    }
+
+    #[test]
+    fn removing_dirty_inode_can_be_flushed() {
+        let mut fs = make_fs();
+
+        fs.create_file("/dirty.txt").unwrap();
+        fs.write_to_file("/dirty.txt", b"dirty inode").unwrap();
+        fs.remove_dir_entry("/dirty.txt").unwrap();
+
+        fs.flush();
     }
 
     #[test]

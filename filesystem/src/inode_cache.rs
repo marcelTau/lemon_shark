@@ -77,6 +77,7 @@ impl INodeCache {
 
     pub fn remove(&mut self, index: INodeIndex) {
         self.inodes[index.inner() as usize] = None;
+        self.dirty.unset(index.inner() as usize);
     }
 
     pub fn register_new_inode(&mut self, index: INodeIndex, inode: INode) {
@@ -90,7 +91,7 @@ impl INodeCache {
 
     pub fn drain(&mut self) -> impl Iterator<Item = (INodeIndex, INode)> {
         self.dirty
-            .drain_set()
+            .drain_ones()
             .map(|index| INodeIndex::new(index as u32))
             .map(|idx| (idx, self.inodes[idx.inner() as usize].unwrap()))
     }

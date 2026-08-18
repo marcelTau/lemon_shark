@@ -1,7 +1,7 @@
 use core::mem;
 use core::num::NonZeroU32;
 
-use crate::{INode, BLOCK_SIZE, INODES_PER_BLOCK};
+use crate::{BLOCK_SIZE, INODES_PER_BLOCK, INode};
 
 /// An Index into the blocks used for the block device.
 #[derive(Debug, Clone, Copy)]

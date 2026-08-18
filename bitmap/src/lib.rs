@@ -100,7 +100,7 @@ impl Bitmap {
     }
 
     /// Returns an iterator over all set bits and unsets them.
-    pub fn drain_set(&mut self) -> impl Iterator<Item = usize> {
+    pub fn drain_ones(&mut self) -> impl Iterator<Item = usize> {
         self.words.iter_mut().enumerate().flat_map(|(idx, n)| {
             core::iter::from_fn(move || {
                 if *n == 0 {
@@ -279,7 +279,7 @@ mod tests {
     #[test]
     fn drain_set_empty_yields_nothing() {
         let mut bitmap = Bitmap::new(64);
-        let result: Vec<usize> = bitmap.drain_set().collect();
+        let result: Vec<usize> = bitmap.drain_ones().collect();
         assert!(result.is_empty());
     }
 
@@ -290,7 +290,7 @@ mod tests {
         for &i in &indices {
             bitmap.set(i);
         }
-        let mut result: Vec<usize> = bitmap.drain_set().collect();
+        let mut result: Vec<usize> = bitmap.drain_ones().collect();
         result.sort();
         assert_eq!(result, indices);
     }
@@ -300,7 +300,7 @@ mod tests {
         let mut bitmap = Bitmap::new(64);
         bitmap.set(1);
         bitmap.set(33);
-        let _: Vec<_> = bitmap.drain_set().collect();
+        let _: Vec<_> = bitmap.drain_ones().collect();
         assert!(!bitmap.is_set(1));
         assert!(!bitmap.is_set(33));
     }
@@ -311,7 +311,7 @@ mod tests {
         for i in [63usize, 0, 100, 32, 7] {
             bitmap.set(i);
         }
-        let result: Vec<usize> = bitmap.drain_set().collect();
+        let result: Vec<usize> = bitmap.drain_ones().collect();
         let mut sorted = result.clone();
         sorted.sort();
         assert_eq!(result, sorted);
@@ -323,7 +323,7 @@ mod tests {
         for i in 0..64 {
             bitmap.set(i);
         }
-        let result: Vec<usize> = bitmap.drain_set().collect();
+        let result: Vec<usize> = bitmap.drain_ones().collect();
         assert_eq!(result, (0usize..64).collect::<Vec<_>>());
         for i in 0..64 {
             assert!(!bitmap.is_set(i));
