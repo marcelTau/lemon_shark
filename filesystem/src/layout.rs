@@ -1,7 +1,7 @@
 use core::mem;
 use core::num::NonZeroU32;
 
-use crate::{BLOCK_SIZE, INODES_PER_BLOCK, INode};
+use crate::{INode, BLOCK_SIZE, INODES_PER_BLOCK};
 
 /// An Index into the blocks used for the block device.
 #[derive(Debug, Clone, Copy)]
@@ -49,6 +49,7 @@ impl INodeIndex {
 #[derive(Clone, Copy, Debug, Default)]
 #[repr(transparent)]
 pub(crate) struct DataBlockIndex(Option<NonZeroU32>);
+
 impl DataBlockIndex {
     /// Creates a new `DataBlockIndex` from an index into the data segment.
     pub(crate) fn new(base: usize, val: usize) -> Self {

@@ -48,6 +48,8 @@ pub(crate) const MAX_INODES: usize = 4096;
 /// Magic value written to the start of the block device.
 const MAGIC: u64 = 0x4e4f4d454c; // lemon (le)
 
+const DIR_ENTRY_SIZE: usize = mem::size_of::<DirEntry>();
+
 /// Version of the filesystem implementation. Increment when doing a breaking change.
 const FILESYSTEM_VERSION: u32 = 2;
 
@@ -357,9 +359,10 @@ impl SuperBlock {
     }
 }
 
-struct ResolvedPath {
+struct ResolvedPath<'a> {
     parent: INodeIndex,
-    basename: INodeIndex,
+    basename: &'a str,
+    basename_inode: INodeIndex,
 }
 
 /// Terminology:
@@ -469,6 +472,7 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
         &mut self.block_device
     }
 
+    /// Reads the root `INode` at `INodeIndex(0)` and ensures it's a valid directory.
     fn validate_root_inode(&mut self) -> Result<(), Error> {
         let mut buf = [0u8; BLOCK_SIZE];
 
@@ -493,7 +497,7 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
         });
     }
 
-    /// Writes a new `INode` to disk.
+    /// Writes a new `INode` to disk returning it's `INodeIndex`.
     fn new_inode(&mut self, inode: &INode) -> Option<INodeIndex> {
         let free = INodeIndex::new(self.inode_bitmap.find_free()?.try_into().ok()?);
 
@@ -516,7 +520,17 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
         }
     }
 
-    fn resolve_path(&mut self, path: &str) -> Result<ResolvedPath, Error> {
+    /// Resovles a `Path` by walking from the root until the leaf is found.
+    ///
+    /// Current limitations are that it's not possible to have a file with the same name as a
+    /// directory.
+    ///
+    /// TODO(mt): this assumes that `path` is absolute. How and where is this enforced? IIRC this
+    /// is how the shell does it but it's not validated anywhere as far as I know.
+    ///
+    /// TODO(mt): also the `byte_compare` handling is quite awkward. Would be nice to get rid of
+    /// this.
+    fn resolve_path<'a>(&mut self, path: &'a str) -> Result<ResolvedPath<'a>, Error> {
         let mut parent_dir = INodeIndex::new(0);
 
         let (path, basename) = path.rsplit_once('/').unwrap_or((path, path));
@@ -546,7 +560,8 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
 
         Ok(ResolvedPath {
             parent: parent_dir,
-            basename: file.inode(),
+            basename,
+            basename_inode: file.inode(),
         })
     }
 
@@ -559,21 +574,32 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
             .get_mut(inode_index, &mut self.block_device)
     }
 
+    /// Removes a `path` from the filesystem by performing a swap-remove.
+    ///
+    /// 1. Find last used entry of parent
+    /// 2. Store it locally and clear it's memory
+    /// 3. Go to the slot of the to-be-removed entry
+    /// 4. Overwrite it with the removed 'last entry'
     pub fn remove_dir_entry(&mut self, path: &str) -> Result<(), Error> {
         let resolved = self.resolve_path(path)?;
+        let to_remove = resolved.basename;
+        let to_remove_inode = *self.lookup_inode(resolved.basename_inode);
         let parent_inode = *self.lookup_inode(resolved.parent);
 
-        let num_parent_entries = unsafe { parent_inode.current_dir_entries() };
+        // TODO(mt): right now we only support removing files, not directories as this would
+        // require removing all of it's files etc.
+        if to_remove_inode.is_directory() {
+            return Err(Error::OperationNotSupported);
+        }
 
-        let to_remove = path.rsplit_once('/').map(|(_, n)| n).unwrap_or(path);
+        let num_parent_entries = unsafe { parent_inode.current_dir_entries() };
 
         let found = DirEntryReader::new(self.block_device_mut(), parent_inode)
             .find(|entry| entry.entry.name() == to_remove)
             .ok_or(Error::NotFound)?;
 
         let last_block_slot = (num_parent_entries - 1) / DIR_ENTRY_PER_BLOCK;
-        let last_block_offset =
-            (num_parent_entries - 1) % DIR_ENTRY_PER_BLOCK * mem::size_of::<DirEntry>();
+        let last_block_offset = (num_parent_entries - 1) % DIR_ENTRY_PER_BLOCK * DIR_ENTRY_SIZE;
 
         let Some(last_block_index) = parent_inode.block(last_block_slot).to_block() else {
             log::error!("Could not find last_block_index. This should never happen.");
@@ -614,14 +640,6 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
             .shrink(mem::size_of::<DirEntry>());
 
         // Free the blocks of the deleted inode.
-        let to_remove_inode = *self.lookup_inode(resolved.basename);
-
-        // TODO(mt): right now we only support removing files, not directories as this would require removing all of it's files etc.
-        if to_remove_inode.is_directory() {
-            return Err(Error::OperationNotSupported);
-        }
-
-        // Free the blocks of the deleted inode.
         for block in to_remove_inode.used_blocks() {
             let block_index = block.to_block().expect("Checked in `used_blocks`");
             modify_block(&mut self.block_device, block_index, |buf| buf.clear());
@@ -629,8 +647,9 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
         }
 
         // TODO(mt): double check that this is correct.
-        self.inode_bitmap.unset(resolved.basename.inner() as usize);
-        self.inode_cache.remove(resolved.basename);
+        self.inode_bitmap
+            .unset(resolved.basename_inode.inner() as usize);
+        self.inode_cache.remove(resolved.basename_inode);
 
         Ok(())
     }
@@ -724,8 +743,6 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
     /// block. If not then we need to allocate a new block and attach this to
     /// the `INode`.
     fn write_dir_entry(&mut self, entry: DirEntry, inode_index: INodeIndex) -> Result<(), Error> {
-        const DIR_ENTRY_SIZE: usize = mem::size_of::<DirEntry>();
-
         let inode = self
             .inode_cache
             .get_mut(inode_index, &mut self.block_device);
@@ -818,7 +835,7 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
 
         let inode = self
             .inode_cache
-            .get_mut(resolved.basename, &mut self.block_device);
+            .get_mut(resolved.basename_inode, &mut self.block_device);
 
         if inode.is_directory() {
             return Err(Error::IsDirectory);
@@ -875,7 +892,7 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
 
         let inode = self
             .inode_cache
-            .get_mut(resolved.basename, &mut self.block_device);
+            .get_mut(resolved.basename_inode, &mut self.block_device);
 
         if inode.is_directory() {
             return Err(Error::IsDirectory);
@@ -913,7 +930,7 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
 
         let inode_index = match path {
             "/" => INodeIndex::root(),
-            _ => self.resolve_path(path)?.basename,
+            _ => self.resolve_path(path)?.basename_inode,
         };
 
         log::info!("Found inode_index={inode_index:?} for path=\"{path}\"");
@@ -1094,15 +1111,16 @@ fn write_bitmap<Dev: BlockDevice>(
     debug_assert!(words.next().is_none());
 }
 
-fn modify_block<Dev: BlockDevice, R, F: FnOnce(&mut Buffer) -> R>(
-    block_device: &mut Dev,
-    block_index: BlockIndex,
-    f: F,
-) -> R {
+/// A wrapper ensuring the read block at `index` is updated and written to disk.
+fn modify_block<Dev, R, F>(dev: &mut Dev, index: BlockIndex, f: F) -> R
+where
+    Dev: BlockDevice,
+    F: FnOnce(&mut Buffer) -> R,
+{
     let mut buf = Buffer::new();
-    block_device.read_block(block_index, buf.inner());
+    dev.read_block(index, buf.inner());
     let result = f(&mut buf);
-    block_device.write_block(block_index, buf.inner());
+    dev.write_block(index, buf.inner());
     result
 }
 
@@ -1893,6 +1911,28 @@ mod tests {
         fs.mkdir("/emptydir").unwrap();
         let res = fs.remove_dir_entry("/emptydir");
         assert_eq!(res.err(), Some(Error::OperationNotSupported));
+    }
+
+    #[test]
+    fn failed_directory_remove_does_not_remove_entry() {
+        let mut fs = make_fs();
+
+        fs.mkdir("/emptydir").unwrap();
+        assert_eq!(
+            fs.remove_dir_entry("/emptydir"),
+            Err(Error::OperationNotSupported)
+        );
+
+        let names: Vec<_> = fs
+            .read_dir_entry(INodeIndex::root())
+            .into_iter()
+            .map(|entry| entry.name())
+            .collect();
+
+        assert!(
+            names.contains(&"emptydir".to_string()),
+            "a failed removal must leave the directory entry unchanged"
+        );
     }
 
     #[test]
