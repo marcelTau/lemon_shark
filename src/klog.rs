@@ -59,6 +59,8 @@ fn module_prefix(target: &str) -> &str {
         "timer"
     } else if target.starts_with("lemon_shark::klog") {
         "klog"
+    } else if target.starts_with("lemon_shark::page_frame_allocator") {
+        "pfa"
     } else {
         target.trim_start_matches("lemon_shark::")
     }

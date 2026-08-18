@@ -49,7 +49,7 @@ fn panic_handler(info: &PanicInfo) -> ! {
 pub static ALLOCATOR: LockedAllocator = LockedAllocator::new();
 
 pub fn dump_memory() {
-    unsafe { ALLOCATOR.dump_state() };
+    ALLOCATOR.dump_state();
 }
 
 pub fn test_runner(tests: &[&dyn Testable]) {
