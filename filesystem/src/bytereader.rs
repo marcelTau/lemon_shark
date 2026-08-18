@@ -73,11 +73,7 @@ impl<'a> ByteWriter<'a> {
     }
 }
 
-pub(crate) trait DiskFormat: Sized {
+pub(crate) trait DiskFormat {
     fn write_to(&self, writer: &mut ByteWriter);
     fn read_from(reader: &mut ByteReader) -> Self;
-
-    fn from_bytes(bytes: &[u8]) -> Self {
-        Self::read_from(&mut ByteReader::new(bytes))
-    }
 }

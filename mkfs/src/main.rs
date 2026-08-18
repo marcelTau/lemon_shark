@@ -58,7 +58,7 @@ fn main() {
         .unwrap_or(DEFAULT_BLOCKS);
 
     let dev = FileBlockDevice::create(path, total_blocks).expect("failed to create image");
-    Filesystem::format(dev);
+    Filesystem::format(dev).expect("device is too small to format");
 
     println!(
         "Formatted {} ({} blocks, {} bytes)",

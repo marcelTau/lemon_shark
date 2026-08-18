@@ -18,13 +18,12 @@ pub(crate) struct INodeCache {
 }
 
 impl INodeCache {
-    pub fn new(layout: Layout) -> Self {
-        let size = layout.inode_bitmap_blocks * BLOCK_SIZE;
-        log::debug!("INodeCache size={size}");
+    pub fn new(layout: Layout, inode_count: usize) -> Self {
+        log::debug!("INodeCache inode_count={inode_count}");
         Self {
             inodes: Vec::new(),
             layout: Some(layout),
-            dirty: Bitmap::new(size as u32),
+            dirty: Bitmap::new(inode_count),
         }
     }
 
@@ -67,7 +66,7 @@ impl INodeCache {
         }
 
         // When handing out a mutable reference, consider it dirty.
-        self.dirty.set(index.inner());
+        self.dirty.set(index.inner() as usize);
 
         self.inodes
             .get_mut(index.inner() as usize)
@@ -92,7 +91,7 @@ impl INodeCache {
     pub fn drain(&mut self) -> impl Iterator<Item = (INodeIndex, INode)> {
         self.dirty
             .drain_set()
-            .map(INodeIndex::new)
+            .map(|index| INodeIndex::new(index as u32))
             .map(|idx| (idx, self.inodes[idx.inner() as usize].unwrap()))
     }
 }

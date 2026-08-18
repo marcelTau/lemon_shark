@@ -11,8 +11,12 @@ struct PageFrameAllocator {
 }
 
 impl PageFrameAllocator {
-    /// SAFETY: This requires the `_kernel_end` sybmol to be set and valid. It has to be
-    /// page-aligned and point to an address right after the kernels binary and in unused RAM.
+    /// Creates a new `PageFrameAllocator`.
+    ///
+    /// # SAFETY
+    ///
+    /// Requires the `_kernel_end` symbol to be page aligned and pointing to the address right
+    /// after the kernels binary in usused RAM.
     unsafe fn new() -> Self {
         unsafe extern "C" {
             static _kernel_end: u8;
@@ -22,19 +26,13 @@ impl PageFrameAllocator {
         let kernel_end = unsafe { &_kernel_end as *const u8 as usize };
         let ram_end = device_tree::ram_base() + size;
 
-        let num_pages = ((ram_end - kernel_end) / PAGE_SIZE) & !31;
+        let num_pages = (ram_end - kernel_end) / PAGE_SIZE;
 
-        log::info!("[PageFrameAllocator] Found {num_pages} pages");
-
-        log::info!(
-            "[PageFrameAllocator] start={} multiple_of_8={}",
-            kernel_end,
-            kernel_end.is_multiple_of(0x8)
-        );
+        log::info!("Found {num_pages} pages");
 
         Self {
             start: kernel_end,
-            free: Bitmap::new(num_pages as u32),
+            free: Bitmap::new(num_pages),
         }
     }
 
@@ -45,12 +43,12 @@ impl PageFrameAllocator {
             self.free.set(idx);
         }
 
-        idx.map(|idx| self.start + PAGE_SIZE * idx as usize)
+        idx.map(|idx| self.start + PAGE_SIZE * idx)
     }
 
     fn free(&mut self, addr: PhysAddr) {
         let idx = (addr - self.start) / PAGE_SIZE;
-        self.free.unset(idx as u32);
+        self.free.unset(idx);
     }
 }
 

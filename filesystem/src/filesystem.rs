@@ -1,6 +1,6 @@
 //! How the filesystem works:
 //!
-//! The disk is split into blocks of SIZE, for now 512 bytes.
+//! The disk is split into blocks of `BLOCK_SIZE`, for now 512 bytes.
 //!
 //! We store i-nodes which contain metadata about files such as the size, and
 //! which blocks this file is using in special i-node reserved blocks in the
@@ -22,12 +22,11 @@
 extern crate alloc;
 use crate::bytereader::{ByteReader, ByteWriter, DiskFormat};
 use crate::dir_entry::DirEntry;
-use crate::inode::{INODE_BLOCKS, INode};
+use crate::inode::{INode, INODE_BLOCKS};
 use crate::inode_cache::INodeCache;
 use crate::layout::Layout;
 use crate::{BlockIndex, INodeIndex};
 use alloc::string::{String, ToString};
-use alloc::vec;
 use alloc::vec::Vec;
 use bitmap::Bitmap;
 use core::mem;
@@ -35,9 +34,10 @@ use core::mem;
 /// Number of `DirEntry` per block.
 pub(crate) const DIR_ENTRY_PER_BLOCK: usize = BLOCK_SIZE / core::mem::size_of::<DirEntry>();
 
-// ----------------------------------------------------------------------------
 /// BlockSize of the Filesystem.
 pub const BLOCK_SIZE: usize = 512;
+
+// TODO(mt): create a trait which calculates the 'per block' values to remove those ugly constants.
 
 /// Number of INodes per block.
 pub(crate) const INODES_PER_BLOCK: usize = BLOCK_SIZE / core::mem::size_of::<INode>();
@@ -47,6 +47,12 @@ pub(crate) const MAX_INODES: usize = 4096;
 
 /// Magic value written to the start of the block device.
 const MAGIC: u64 = 0x4e4f4d454c; // lemon (le)
+
+/// Version of the filesystem implementation. Increment when doing a breaking change.
+const FILESYSTEM_VERSION: u32 = 2;
+
+/// On-disk size: one little-endian u64 followed by twelve little-endian u32 fields.
+const SUPERBLOCK_ENCODED_SIZE: usize = 8 + 12 * 4;
 
 /// The trait that any block device backend must implement.
 pub trait BlockDevice {
@@ -72,6 +78,8 @@ pub enum Error {
     OperationNotSupported,
     CorruptedRoot,
     InvalidSuperblock,
+    DeviceTooSmall,
+    UnsupportedFilesystemVersion(u32),
 }
 
 impl core::error::Error for Error {}
@@ -107,12 +115,6 @@ impl Buffer {
 
     fn write_struct_at<T: DiskFormat>(&mut self, value: &T, offset: usize) {
         value.write_to(&mut ByteWriter::at(&mut self.buf, offset));
-    }
-
-    fn iter_structs<T: DiskFormat + 'static>(&self) -> impl Iterator<Item = T> + '_ {
-        self.buf
-            .chunks_exact(mem::size_of::<T>())
-            .map(T::from_bytes)
     }
 
     fn clear_struct_at<T>(&mut self, offset: usize) {
@@ -202,29 +204,156 @@ enum Entry {
     Directory,
 }
 
-/// The `Superblock` contains counts & pointers to strucutres used and metadata
-/// about the state of the allocator.
-#[repr(C)]
-#[derive(Debug, PartialEq)]
+/// The versioned `SuperBlock` describes every filesystem region on disk.
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct SuperBlock {
     magic: u64,
+    version: u32,
     block_size: u32,
     total_blocks: u32,
+    inode_count: u32,
+    inode_bitmap_start: u32,
+    inode_bitmap_blocks: u32,
+    data_bitmap_start: u32,
+    data_bitmap_blocks: u32,
+    inode_table_start: u32,
+    inode_table_blocks: u32,
+    data_start: u32,
+    data_blocks: u32,
 }
 
 impl DiskFormat for SuperBlock {
     fn write_to(&self, writer: &mut ByteWriter) {
         writer.write_u64(self.magic);
+        writer.write_u32(self.version);
         writer.write_u32(self.block_size);
         writer.write_u32(self.total_blocks);
+        writer.write_u32(self.inode_count);
+        writer.write_u32(self.inode_bitmap_start);
+        writer.write_u32(self.inode_bitmap_blocks);
+        writer.write_u32(self.data_bitmap_start);
+        writer.write_u32(self.data_bitmap_blocks);
+        writer.write_u32(self.inode_table_start);
+        writer.write_u32(self.inode_table_blocks);
+        writer.write_u32(self.data_start);
+        writer.write_u32(self.data_blocks);
     }
 
     fn read_from(reader: &mut ByteReader) -> Self {
         Self {
             magic: reader.read_u64(),
+            version: reader.read_u32(),
             block_size: reader.read_u32(),
             total_blocks: reader.read_u32(),
+            inode_count: reader.read_u32(),
+            inode_bitmap_start: reader.read_u32(),
+            inode_bitmap_blocks: reader.read_u32(),
+            data_bitmap_start: reader.read_u32(),
+            data_bitmap_blocks: reader.read_u32(),
+            inode_table_start: reader.read_u32(),
+            inode_table_blocks: reader.read_u32(),
+            data_start: reader.read_u32(),
+            data_blocks: reader.read_u32(),
         }
+    }
+}
+
+impl SuperBlock {
+    fn from_layout(total_blocks: usize, inode_count: usize, layout: Layout) -> Self {
+        Self {
+            magic: MAGIC,
+            version: FILESYSTEM_VERSION,
+            block_size: BLOCK_SIZE as u32,
+            total_blocks: total_blocks as u32,
+            inode_count: inode_count as u32,
+            inode_bitmap_start: layout.inode_bitmap_start as u32,
+            inode_bitmap_blocks: layout.inode_bitmap_blocks as u32,
+            data_bitmap_start: layout.data_bitmap_start as u32,
+            data_bitmap_blocks: layout.data_bitmap_blocks as u32,
+            inode_table_start: layout.inode_table_start as u32,
+            inode_table_blocks: layout.inode_table_blocks as u32,
+            data_start: layout.data_start as u32,
+            data_blocks: layout.data_blocks as u32,
+        }
+    }
+
+    fn validate(&self, device_blocks: usize) -> Result<Layout, Error> {
+        if self.magic != MAGIC {
+            return Err(Error::InvalidSuperblock);
+        }
+        if self.version != FILESYSTEM_VERSION {
+            return Err(Error::UnsupportedFilesystemVersion(self.version));
+        }
+        if self.block_size as usize != BLOCK_SIZE
+            || usize::try_from(self.total_blocks).ok() != Some(device_blocks)
+        {
+            return Err(Error::InvalidSuperblock);
+        }
+
+        let inode_count = self.inode_count as usize;
+        let layout = Layout {
+            inode_bitmap_start: self.inode_bitmap_start as usize,
+            inode_bitmap_blocks: self.inode_bitmap_blocks as usize,
+            data_bitmap_start: self.data_bitmap_start as usize,
+            data_bitmap_blocks: self.data_bitmap_blocks as usize,
+            inode_table_start: self.inode_table_start as usize,
+            inode_table_blocks: self.inode_table_blocks as usize,
+            data_start: self.data_start as usize,
+            data_blocks: self.data_blocks as usize,
+        };
+
+        let inode_bitmap_end = layout
+            .inode_bitmap_start
+            .checked_add(layout.inode_bitmap_blocks)
+            .ok_or(Error::InvalidSuperblock)?;
+        let data_bitmap_end = layout
+            .data_bitmap_start
+            .checked_add(layout.data_bitmap_blocks)
+            .ok_or(Error::InvalidSuperblock)?;
+        let inode_table_end = layout
+            .inode_table_start
+            .checked_add(layout.inode_table_blocks)
+            .ok_or(Error::InvalidSuperblock)?;
+        let data_end = layout
+            .data_start
+            .checked_add(layout.data_blocks)
+            .ok_or(Error::InvalidSuperblock)?;
+
+        if layout.inode_bitmap_start != 1
+            || layout.data_bitmap_start != inode_bitmap_end
+            || layout.inode_table_start != data_bitmap_end
+            || layout.data_start != inode_table_end
+            || data_end != device_blocks
+        {
+            return Err(Error::InvalidSuperblock);
+        }
+
+        let bitmap_capacity = |blocks: usize| {
+            blocks
+                .checked_mul(BLOCK_SIZE)
+                .and_then(|bytes| bytes.checked_mul(8))
+        };
+        let inode_table_capacity = layout
+            .inode_table_blocks
+            .checked_mul(INODES_PER_BLOCK)
+            .ok_or(Error::InvalidSuperblock)?;
+
+        if inode_count == 0
+            || bitmap_capacity(layout.inode_bitmap_blocks)
+                .is_none_or(|capacity| capacity < inode_count)
+            || bitmap_capacity(layout.data_bitmap_blocks)
+                .is_none_or(|capacity| capacity < layout.data_blocks)
+            || inode_table_capacity < inode_count
+        {
+            return Err(Error::InvalidSuperblock);
+        }
+
+        let canonical = Layout::new(device_blocks, inode_count).ok_or(Error::InvalidSuperblock)?;
+        if layout != canonical {
+            return Err(Error::InvalidSuperblock);
+        }
+
+        Ok(layout)
     }
 }
 
@@ -264,43 +393,42 @@ fn entry_display(inode: &INode, name: String) -> (char, String, String) {
 }
 
 impl<Dev: BlockDevice> Filesystem<Dev> {
-    /// Reads the superblock from block_index 0 if the filesystem has the right format.
-    fn read_superblock(block_device: &mut Dev) -> Option<SuperBlock> {
+    /// Reads and decodes the versioned superblock from block zero.
+    fn read_superblock(block_device: &mut Dev) -> Result<SuperBlock, Error> {
+        if block_device.total_blocks() == 0 {
+            return Err(Error::InvalidSuperblock);
+        }
         let mut buf = [0u8; BLOCK_SIZE];
         block_device.read_block(BlockIndex::from_raw(0), &mut buf);
-        let sb = SuperBlock::read_from(&mut ByteReader::new(&buf[0..mem::size_of::<SuperBlock>()]));
-
-        (sb.magic == MAGIC).then_some(sb)
+        Ok(SuperBlock::read_from(&mut ByteReader::new(
+            &buf[..SUPERBLOCK_ENCODED_SIZE],
+        )))
     }
 
     pub fn new(mut block_device: Dev) -> Result<Self, Error> {
-        let sb = Self::read_superblock(&mut block_device).ok_or(Error::InvalidSuperblock)?;
-        let layout = Layout::new(sb.total_blocks);
+        let sb = Self::read_superblock(&mut block_device)?;
+        let layout = sb.validate(block_device.total_blocks())?;
+        let inode_count = sb.inode_count as usize;
 
-        log::info!("generated layout: {layout:?}");
+        log::info!("mounted layout: {layout:?}");
 
-        let mut read_bitmap = |blocks: usize, bitmap_start: usize| -> Vec<u8> {
-            let mut raw = vec![0u8; BLOCK_SIZE * blocks];
-            for i in 0..blocks {
-                let start = i * BLOCK_SIZE;
-                let end = start + BLOCK_SIZE;
-                let block_index = BlockIndex::from_raw((bitmap_start + i) as u32);
-                block_device.read_block(block_index, &mut raw[start..end]);
-            }
-
-            raw
-        };
-
-        let inode_bitmap_raw = read_bitmap(layout.inode_bitmap_blocks, layout.inode_bitmap_start);
-        let data_bitmap_raw = read_bitmap(layout.data_bitmap_blocks, layout.data_bitmap_start);
-
-        let inode_bitmap = Bitmap::read_from(&mut ByteReader::new(&inode_bitmap_raw));
-        let data_bitmap = Bitmap::read_from(&mut ByteReader::new(&data_bitmap_raw));
+        let inode_bitmap = read_bitmap(
+            &mut block_device,
+            layout.inode_bitmap_start,
+            layout.inode_bitmap_blocks,
+            inode_count,
+        )?;
+        let data_bitmap = read_bitmap(
+            &mut block_device,
+            layout.data_bitmap_start,
+            layout.data_bitmap_blocks,
+            layout.data_blocks,
+        )?;
 
         let mut fs = Self {
             inode_bitmap,
             data_bitmap,
-            inode_cache: INodeCache::new(layout),
+            inode_cache: INodeCache::new(layout, inode_count),
             block_device,
             layout,
         };
@@ -310,33 +438,29 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
         Ok(fs)
     }
 
-    /// Formats a blank block device as a LemonShark filesystem.
+    /// Formats a blank block device as a `LemonShark` filesystem.
     ///
     /// Writes the superblock, initialises empty bitmaps, creates the root
     /// directory inode with `.` and `..` entries, and flushes everything to
     /// disk.
-    pub fn format(mut block_device: Dev) {
-        let total_blocks = block_device.total_blocks() as u32;
-        let layout = Layout::new(total_blocks);
-
-        // Each bitmap block stores: 4-byte word_count header + word_count*4
-        // bytes of bit data.  To guarantee the serialised form fits within the
-        // allocated blocks we size the bitmap so that header + data == exactly
-        // N * BLOCK_SIZE bytes:
-        //   usable_words = (N * BLOCK_SIZE - 4) / 4   →   usable_bits = usable_words * 32
-        let inode_bitmap_bits = ((layout.inode_bitmap_blocks * BLOCK_SIZE - 4) / 4 * 32) as u32;
-        let data_bitmap_bits = ((layout.data_bitmap_blocks * BLOCK_SIZE - 4) / 4 * 32) as u32;
+    pub fn format(mut block_device: Dev) -> Result<(), Error> {
+        let total_blocks = block_device.total_blocks();
+        if u32::try_from(total_blocks).is_err() {
+            return Err(Error::DeviceTooSmall);
+        }
+        let layout = Layout::new(total_blocks, MAX_INODES).ok_or(Error::DeviceTooSmall)?;
 
         let mut fs = Self {
             block_device,
-            inode_bitmap: Bitmap::new(inode_bitmap_bits),
-            data_bitmap: Bitmap::new(data_bitmap_bits),
-            inode_cache: INodeCache::new(layout),
+            inode_bitmap: Bitmap::new(MAX_INODES),
+            data_bitmap: Bitmap::new(layout.data_blocks),
+            inode_cache: INodeCache::new(layout, MAX_INODES),
             layout,
         };
 
         fs.create_empty_root();
         fs.flush();
+        Ok(())
     }
 
     /// Returns a mutable reference to the underlying block device.
@@ -371,11 +495,11 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
 
     /// Writes a new `INode` to disk.
     fn new_inode(&mut self, inode: &INode) -> Option<INodeIndex> {
-        let free = INodeIndex::new(self.inode_bitmap.find_free()?);
+        let free = INodeIndex::new(self.inode_bitmap.find_free()?.try_into().ok()?);
 
         log::trace!("writing inode to {free:?} in {:?}", self.inode_bitmap);
 
-        self.inode_bitmap.set(free.inner());
+        self.inode_bitmap.set(free.inner() as usize);
 
         self.write_inode_to_disk(free, inode);
 
@@ -505,7 +629,7 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
         }
 
         // TODO(mt): double check that this is correct.
-        self.inode_bitmap.unset(resolved.basename.inner());
+        self.inode_bitmap.unset(resolved.basename.inner() as usize);
         self.inode_cache.remove(resolved.basename);
 
         Ok(())
@@ -617,7 +741,7 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
         };
 
         if block.is_empty() {
-            let free = self.data_bitmap.find_free().unwrap();
+            let free = self.data_bitmap.find_free().ok_or(Error::NoSpaceLeft)?;
             let free_block_index = self.layout.data_block(free);
             *block = free_block_index;
             self.data_bitmap.set(free);
@@ -779,7 +903,7 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
         modify_block(&mut self.block_device, BlockIndex::from_raw(0), |buf| {
             buf.clear();
             superblock.write_to(&mut ByteWriter::new(
-                &mut buf.inner()[0..mem::size_of::<SuperBlock>()],
+                &mut buf.inner()[..SUPERBLOCK_ENCODED_SIZE],
             ));
         });
     }
@@ -881,37 +1005,25 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
         self.inode_cache = inode_cache;
 
         // Write the superblock to disk
-        let superblock = SuperBlock {
-            magic: MAGIC,
-            block_size: BLOCK_SIZE as u32,
-            total_blocks: self.block_device.total_blocks() as u32,
-        };
+        let superblock = SuperBlock::from_layout(
+            self.block_device.total_blocks(),
+            self.inode_bitmap.len(),
+            self.layout,
+        );
 
         self.write_superblock(&superblock);
 
-        let mut write_bitmap = |blocks: usize, start_block: usize, bitmap: &Bitmap| {
-            let total_bytes = blocks * BLOCK_SIZE;
-
-            let mut buf = vec![0u8; total_bytes];
-            let mut writer = ByteWriter::new(&mut buf);
-
-            bitmap.write_to(&mut writer);
-
-            for (i, chunk) in buf[..].chunks(BLOCK_SIZE).enumerate() {
-                let block = BlockIndex::from_raw((start_block + i) as u32);
-                self.block_device.write_block(block, chunk);
-            }
-        };
-
         write_bitmap(
-            self.layout.inode_bitmap_blocks,
+            &mut self.block_device,
             self.layout.inode_bitmap_start,
+            self.layout.inode_bitmap_blocks,
             &self.inode_bitmap,
         );
 
         write_bitmap(
-            self.layout.data_bitmap_blocks,
+            &mut self.block_device,
             self.layout.data_bitmap_start,
+            self.layout.data_bitmap_blocks,
             &self.data_bitmap,
         );
 
@@ -929,6 +1041,57 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
     pub fn write_to_file(&mut self, path: &str, bytes: &[u8]) -> Result<usize, Error> {
         self.append_to_file(path, bytes)
     }
+}
+
+fn read_bitmap<Dev: BlockDevice>(
+    block_device: &mut Dev,
+    start: usize,
+    blocks: usize,
+    logical_len: usize,
+) -> Result<Bitmap, Error> {
+    let word_count = logical_len.div_ceil(u32::BITS as usize);
+    let bytes_needed = word_count.checked_mul(4).ok_or(Error::InvalidSuperblock)?;
+    let region_bytes = blocks
+        .checked_mul(BLOCK_SIZE)
+        .ok_or(Error::InvalidSuperblock)?;
+    if bytes_needed > region_bytes {
+        return Err(Error::InvalidSuperblock);
+    }
+
+    let blocks_needed = bytes_needed.div_ceil(BLOCK_SIZE);
+    let mut words = Vec::with_capacity(word_count);
+    let mut buf = [0u8; BLOCK_SIZE];
+    for offset in 0..blocks_needed {
+        block_device.read_block(BlockIndex::from_raw((start + offset) as u32), &mut buf);
+        let remaining_words = word_count - words.len();
+        for bytes in buf.chunks_exact(4).take(remaining_words) {
+            words.push(u32::from_le_bytes(bytes.try_into().unwrap()));
+        }
+    }
+
+    Bitmap::from_words(logical_len, words).map_err(|_| Error::InvalidSuperblock)
+}
+
+fn write_bitmap<Dev: BlockDevice>(
+    block_device: &mut Dev,
+    start: usize,
+    blocks: usize,
+    bitmap: &Bitmap,
+) {
+    debug_assert!(bitmap.as_words().len() * 4 <= blocks * BLOCK_SIZE);
+
+    let mut words = bitmap.as_words().iter();
+    for offset in 0..blocks {
+        let mut buf = [0u8; BLOCK_SIZE];
+        for slot in buf.chunks_exact_mut(4) {
+            let Some(word) = words.next() else {
+                break;
+            };
+            slot.copy_from_slice(&word.to_le_bytes());
+        }
+        block_device.write_block(BlockIndex::from_raw((start + offset) as u32), &buf);
+    }
+    debug_assert!(words.next().is_none());
 }
 
 fn modify_block<Dev: BlockDevice, R, F: FnOnce(&mut Buffer) -> R>(
@@ -959,8 +1122,12 @@ mod tests {
 
     impl Ramdisk {
         fn new() -> Self {
+            Self::with_blocks(RAMDISK_SIZE / BLOCK_SIZE)
+        }
+
+        fn with_blocks(total_blocks: usize) -> Self {
             Self {
-                data: Rc::new(RefCell::new(vec![0; RAMDISK_SIZE])),
+                data: Rc::new(RefCell::new(vec![0; total_blocks * BLOCK_SIZE])),
             }
         }
 
@@ -998,8 +1165,36 @@ mod tests {
     fn make_fs() -> Filesystem<Ramdisk> {
         let ramdisk = Ramdisk::new();
         let shared = ramdisk.share();
-        Filesystem::format(ramdisk);
+        Filesystem::format(ramdisk).unwrap();
         Filesystem::new(shared).expect("failed to mount freshly formatted filesystem")
+    }
+
+    fn formatted_device(total_blocks: usize) -> Ramdisk {
+        let ramdisk = Ramdisk::with_blocks(total_blocks);
+        let shared = ramdisk.share();
+        Filesystem::format(ramdisk).unwrap();
+        shared
+    }
+
+    fn read_test_superblock(device: &Ramdisk) -> SuperBlock {
+        let data = device.data.borrow();
+        SuperBlock::read_from(&mut ByteReader::new(&data[..SUPERBLOCK_ENCODED_SIZE]))
+    }
+
+    fn write_test_superblock(device: &Ramdisk, superblock: &SuperBlock) {
+        let mut data = device.data.borrow_mut();
+        data[..BLOCK_SIZE].fill(0);
+        superblock.write_to(&mut ByteWriter::new(&mut data[..SUPERBLOCK_ENCODED_SIZE]));
+    }
+
+    fn mount_with_modified_superblock(
+        modify: impl FnOnce(&mut SuperBlock),
+    ) -> Result<Filesystem<Ramdisk>, Error> {
+        let device = formatted_device(RAMDISK_SIZE / BLOCK_SIZE);
+        let mut superblock = read_test_superblock(&device);
+        modify(&mut superblock);
+        write_test_superblock(&device, &superblock);
+        Filesystem::new(device)
     }
 
     fn inode_copy(fs: &mut Filesystem<Ramdisk>, idx: INodeIndex) -> INode {
@@ -1029,13 +1224,13 @@ mod tests {
             .map(|b| b.inner())
     }
 
-    fn bitmap_capacity_bits(bitmap: &Bitmap) -> u32 {
-        bitmap.words().len() as u32 * 32
+    fn bitmap_capacity_bits(bitmap: &Bitmap) -> usize {
+        bitmap.len()
     }
 
-    fn bitmap_set_count(bitmap: &Bitmap) -> u32 {
+    fn bitmap_set_count(bitmap: &Bitmap) -> usize {
         let bits = bitmap_capacity_bits(bitmap);
-        (0..bits).filter(|&idx| bitmap.is_set(idx)).count() as u32
+        (0..bits).filter(|&idx| bitmap.is_set(idx)).count()
     }
 
     #[test]
@@ -1306,7 +1501,7 @@ mod tests {
         let max_entries_for_inode = 16 * DIR_ENTRY_PER_BLOCK;
         let full_size = (max_entries_for_inode * core::mem::size_of::<DirEntry>()) as u32;
 
-        let mut inode = fs.inode_cache.get_mut(cap, &mut fs.block_device);
+        let inode = fs.inode_cache.get_mut(cap, &mut fs.block_device);
 
         inode.set_size(full_size);
         for block in inode.blocks_mut().filter(|b| b.is_empty()) {
@@ -1539,7 +1734,7 @@ mod tests {
         let max_entries = 16 * DIR_ENTRY_PER_BLOCK;
         let full_size = (max_entries * core::mem::size_of::<DirEntry>()) as u32;
 
-        let mut inode = fs.inode_cache.get_mut(cap, &mut fs.block_device);
+        let inode = fs.inode_cache.get_mut(cap, &mut fs.block_device);
 
         inode.set_size(full_size);
         for block in inode.blocks_mut().filter(|b| b.is_empty()) {
@@ -1705,11 +1900,11 @@ mod tests {
         let mut fs = make_fs();
 
         let idx = fs.create_file("/tracked.txt").unwrap();
-        assert!(fs.inode_bitmap.is_set(idx.inner()));
+        assert!(fs.inode_bitmap.is_set(idx.inner() as usize));
 
         fs.remove_dir_entry("/tracked.txt").unwrap();
 
-        assert!(!fs.inode_bitmap.is_set(idx.inner()));
+        assert!(!fs.inode_bitmap.is_set(idx.inner() as usize));
     }
 
     #[test]
@@ -1889,60 +2084,180 @@ mod tests {
         );
     }
 
-    fn bitmap_round_trip(bitmap: &Bitmap) -> Bitmap {
-        let words = bitmap.words();
-        let total_bytes = 4 + words.len() * 4;
-        let mut buf = vec![0u8; total_bytes];
-        let mut writer = ByteWriter::new(&mut buf);
-        bitmap.write_to(&mut writer);
-        Bitmap::read_from(&mut ByteReader::new(&buf))
+    #[test]
+    fn superblock_round_trip_has_fixed_encoded_size() {
+        assert_eq!(SUPERBLOCK_ENCODED_SIZE, 56);
+        let layout = Layout::new(RAMDISK_SIZE / BLOCK_SIZE, MAX_INODES).unwrap();
+        let expected = SuperBlock::from_layout(RAMDISK_SIZE / BLOCK_SIZE, MAX_INODES, layout);
+        let mut bytes = [0u8; SUPERBLOCK_ENCODED_SIZE];
+        expected.write_to(&mut ByteWriter::new(&mut bytes));
+        let decoded = SuperBlock::read_from(&mut ByteReader::new(&bytes));
+        assert_eq!(decoded, expected);
     }
 
     #[test]
-    fn bitmap_round_trip_with_bits_set() {
-        let mut bitmap = Bitmap::new(128);
-        for i in [0, 12, 88, 127, 66] {
-            bitmap.set(i);
+    fn formatted_bitmaps_have_exact_logical_lengths_and_raw_words() {
+        let device = formatted_device(RAMDISK_SIZE / BLOCK_SIZE);
+        let superblock = read_test_superblock(&device);
+        let inode_bitmap_byte = superblock.inode_bitmap_start as usize * BLOCK_SIZE;
+        let data_bitmap_byte = superblock.data_bitmap_start as usize * BLOCK_SIZE;
+
+        // The first raw word has the root allocation bit and no length header.
+        let data = device.data.borrow();
+        assert_eq!(
+            &data[inode_bitmap_byte..inode_bitmap_byte + 4],
+            &1u32.to_le_bytes()
+        );
+        assert_eq!(
+            &data[data_bitmap_byte..data_bitmap_byte + 4],
+            &1u32.to_le_bytes()
+        );
+        drop(data);
+
+        let fs = Filesystem::new(device).unwrap();
+        assert_eq!(fs.inode_bitmap.len(), MAX_INODES);
+        assert_eq!(fs.data_bitmap.len(), fs.layout.data_blocks);
+    }
+
+    #[test]
+    fn mount_ignores_bitmap_region_padding() {
+        let device = formatted_device(RAMDISK_SIZE / BLOCK_SIZE);
+        let superblock = read_test_superblock(&device);
+        let word_count = (superblock.data_blocks as usize).div_ceil(32);
+        let region_start = superblock.data_bitmap_start as usize * BLOCK_SIZE;
+        let last_word = region_start + (word_count - 1) * 4;
+        let trailing_word = region_start + word_count * 4;
+        {
+            let mut data = device.data.borrow_mut();
+            data[last_word..last_word + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+            data[trailing_word..trailing_word + 4].copy_from_slice(&u32::MAX.to_le_bytes());
         }
-        assert_eq!(bitmap_round_trip(&bitmap), bitmap);
+
+        let fs = Filesystem::new(device).unwrap();
+        assert_eq!(fs.data_bitmap.as_words().len(), word_count);
+        assert_eq!(fs.data_bitmap.len(), superblock.data_blocks as usize);
+        let remainder = superblock.data_blocks as usize % 32;
+        assert_eq!(
+            fs.data_bitmap.as_words()[word_count - 1],
+            if remainder == 0 {
+                u32::MAX
+            } else {
+                (1u32 << remainder) - 1
+            }
+        );
     }
 
     #[test]
-    fn bitmap_round_trip_empty() {
-        let bitmap = Bitmap::new(64);
-        assert_eq!(bitmap_round_trip(&bitmap), bitmap);
+    fn rejects_unsupported_version() {
+        assert_eq!(
+            mount_with_modified_superblock(|sb| sb.version = 1).err(),
+            Some(Error::UnsupportedFilesystemVersion(1))
+        );
     }
 
     #[test]
-    fn bitmap_round_trip_all_set() {
-        let mut bitmap = Bitmap::new(64);
-        for i in 0..64 {
-            bitmap.set(i);
+    fn rejects_v1_superblock() {
+        let device = Ramdisk::new();
+        {
+            let mut data = device.data.borrow_mut();
+            let mut writer = ByteWriter::new(&mut data[..16]);
+            writer.write_u64(MAGIC);
+            writer.write_u32(BLOCK_SIZE as u32);
+            writer.write_u32((RAMDISK_SIZE / BLOCK_SIZE) as u32);
         }
-        assert_eq!(bitmap_round_trip(&bitmap), bitmap);
+        assert_eq!(
+            Filesystem::new(device).err(),
+            Some(Error::UnsupportedFilesystemVersion(BLOCK_SIZE as u32))
+        );
     }
 
     #[test]
-    fn bitmap_round_trip_large_buffer() {
-        let mut bitmap = Bitmap::new(128);
-        bitmap.set(5);
-        bitmap.set(99);
-        let words = bitmap.words();
-        let total_bytes = 4 + words.len() * 4;
-        let mut block = [0u8; 512];
-        let mut writer = ByteWriter::new(&mut block[..total_bytes]);
-        bitmap.write_to(&mut writer);
-        assert_eq!(Bitmap::read_from(&mut ByteReader::new(&block)), bitmap);
+    fn rejects_wrong_magic() {
+        assert_eq!(
+            mount_with_modified_superblock(|sb| sb.magic ^= 1).err(),
+            Some(Error::InvalidSuperblock)
+        );
     }
 
     #[test]
-    fn bitmap_serialized_size() {
-        let bitmap = Bitmap::new(128); // 4 words
-        let words = bitmap.words();
-        let total_bytes = 4 + words.len() * 4;
-        let mut buf = vec![0u8; total_bytes];
-        let mut writer = ByteWriter::new(&mut buf);
-        bitmap.write_to(&mut writer);
-        assert_eq!(buf.len(), 4 + 4 * 4);
+    fn rejects_wrong_block_size() {
+        assert_eq!(
+            mount_with_modified_superblock(|sb| sb.block_size = 4096).err(),
+            Some(Error::InvalidSuperblock)
+        );
+    }
+
+    #[test]
+    fn rejects_device_size_mismatch() {
+        assert_eq!(
+            mount_with_modified_superblock(|sb| sb.total_blocks -= 1).err(),
+            Some(Error::InvalidSuperblock)
+        );
+    }
+
+    #[test]
+    fn rejects_overlapping_or_out_of_range_regions() {
+        assert_eq!(
+            mount_with_modified_superblock(|sb| {
+                sb.data_bitmap_start = sb.inode_bitmap_start;
+            })
+            .err(),
+            Some(Error::InvalidSuperblock)
+        );
+        assert_eq!(
+            mount_with_modified_superblock(|sb| sb.data_blocks += 1).err(),
+            Some(Error::InvalidSuperblock)
+        );
+    }
+
+    #[test]
+    fn rejects_insufficient_bitmap_and_inode_table_capacity() {
+        assert_eq!(
+            mount_with_modified_superblock(|sb| sb.inode_count = 4097).err(),
+            Some(Error::InvalidSuperblock)
+        );
+        assert_eq!(
+            mount_with_modified_superblock(|sb| {
+                let removed = sb.data_bitmap_blocks;
+                sb.data_bitmap_blocks = 0;
+                sb.inode_table_start -= removed;
+                sb.data_start -= removed;
+                sb.data_blocks += removed;
+            })
+            .err(),
+            Some(Error::InvalidSuperblock)
+        );
+        assert_eq!(
+            mount_with_modified_superblock(|sb| {
+                sb.inode_table_blocks -= 1;
+                sb.data_start -= 1;
+                sb.data_blocks += 1;
+            })
+            .err(),
+            Some(Error::InvalidSuperblock)
+        );
+    }
+
+    #[test]
+    fn formatting_too_small_device_returns_error() {
+        let minimum_blocks = (1..RAMDISK_SIZE / BLOCK_SIZE)
+            .find(|&blocks| Layout::new(blocks, MAX_INODES).is_some())
+            .unwrap();
+        assert_eq!(
+            Filesystem::format(Ramdisk::with_blocks(minimum_blocks - 1)),
+            Err(Error::DeviceTooSmall)
+        );
+    }
+
+    #[test]
+    fn data_exhaustion_stops_before_device_end() {
+        let minimum_blocks = (1..RAMDISK_SIZE / BLOCK_SIZE)
+            .find(|&blocks| Layout::new(blocks, MAX_INODES).is_some())
+            .unwrap();
+        let device = formatted_device(minimum_blocks);
+        let mut fs = Filesystem::new(device).unwrap();
+        assert_eq!(fs.layout.data_blocks, 1);
+        fs.create_file("/full").unwrap();
+        assert_eq!(fs.write_to_file("/full", b"x"), Err(Error::NoSpaceLeft));
     }
 }

@@ -1,7 +1,7 @@
 use core::mem;
 use core::num::NonZeroU32;
 
-use crate::{BLOCK_SIZE, INODES_PER_BLOCK, INode, MAX_INODES};
+use crate::{BLOCK_SIZE, INODES_PER_BLOCK, INode};
 
 /// An Index into the blocks used for the block device.
 #[derive(Debug, Clone, Copy)]
@@ -51,8 +51,12 @@ impl INodeIndex {
 pub(crate) struct DataBlockIndex(Option<NonZeroU32>);
 impl DataBlockIndex {
     /// Creates a new `DataBlockIndex` from an index into the data segment.
-    pub(crate) fn new(base: u32, val: u32) -> Self {
-        Self(NonZeroU32::new(base + val))
+    pub(crate) fn new(base: usize, val: usize) -> Self {
+        Self(NonZeroU32::new(
+            (base + val)
+                .try_into()
+                .expect("validated filesystem blocks fit in u32"),
+        ))
     }
 
     pub(crate) fn from_raw_unchecked(val: u32) -> Self {
@@ -63,8 +67,8 @@ impl DataBlockIndex {
         self.0.map(|v| BlockIndex(v.get()))
     }
 
-    pub(crate) fn bitmap_index(&self, layout: &Layout) -> u32 {
-        self.0.unwrap().get() - layout.data_start as u32
+    pub(crate) fn bitmap_index(&self, layout: &Layout) -> usize {
+        self.0.unwrap().get() as usize - layout.data_start
     }
 
     pub(crate) fn is_empty(&self) -> bool {
@@ -76,6 +80,10 @@ impl DataBlockIndex {
     }
 }
 
+/// Describes a `LemonShark` filesystems representation on disk.
+///
+/// Terminology:
+/// Block: 512 bytes on disk
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct Layout {
     pub(crate) inode_bitmap_start: usize,
@@ -106,21 +114,27 @@ impl Layout {
     /// | Data blocks  |
     /// | ...          |
     /// +--------------+
-    pub(crate) fn new(total_blocks: u32) -> Self {
+    pub(crate) fn new(total_blocks: usize, inode_count: usize) -> Option<Self> {
         const SUPERBLOCK_BLOCKS: usize = 1;
         const BITS_PER_BLOCK: usize = BLOCK_SIZE * 8;
 
-        const INODES_PER_BLOCK: usize = BLOCK_SIZE / mem::size_of::<INode>();
-        const INODE_BITMAP_BLOCKS: usize = MAX_INODES.div_ceil(BITS_PER_BLOCK);
-        const INODE_BLOCKS: usize = MAX_INODES.div_ceil(INODES_PER_BLOCK);
+        let inode_bitmap_blocks = inode_count.div_ceil(BITS_PER_BLOCK);
+        let inode_table_blocks = inode_count.div_ceil(INODES_PER_BLOCK);
 
-        let fixed = SUPERBLOCK_BLOCKS + INODE_BITMAP_BLOCKS + INODE_BLOCKS;
+        let fixed = SUPERBLOCK_BLOCKS
+            .checked_add(inode_bitmap_blocks)?
+            .checked_add(inode_table_blocks)?;
+        let remaining = total_blocks.checked_sub(fixed)?;
 
-        let mut data_bitmap_blocks = (total_blocks as usize - fixed).div_ceil(BITS_PER_BLOCK);
+        let mut data_bitmap_blocks = remaining.div_ceil(BITS_PER_BLOCK);
 
         let (data_start, data_blocks) = loop {
-            let data_start = fixed + data_bitmap_blocks;
-            let data_blocks = total_blocks as usize - data_start;
+            let data_start = fixed.checked_add(data_bitmap_blocks)?;
+            let data_blocks = total_blocks.checked_sub(data_start)?;
+
+            if data_blocks == 0 {
+                return None;
+            }
 
             let next = data_blocks.div_ceil(BITS_PER_BLOCK);
 
@@ -131,16 +145,16 @@ impl Layout {
             data_bitmap_blocks = next;
         };
 
-        Self {
+        Some(Self {
             inode_bitmap_start: 1,
-            inode_bitmap_blocks: INODE_BITMAP_BLOCKS,
-            data_bitmap_start: 1 + INODE_BITMAP_BLOCKS,
+            inode_bitmap_blocks,
+            data_bitmap_start: 1 + inode_bitmap_blocks,
             data_bitmap_blocks,
-            inode_table_start: 1 + INODE_BITMAP_BLOCKS + data_bitmap_blocks,
-            inode_table_blocks: INODE_BLOCKS,
+            inode_table_start: 1 + inode_bitmap_blocks + data_bitmap_blocks,
+            inode_table_blocks,
             data_start,
             data_blocks,
-        }
+        })
     }
 
     pub(crate) fn inode_to_block(&self, inode: INodeIndex) -> (BlockIndex, ByteOffset) {
@@ -153,7 +167,7 @@ impl Layout {
         (block_index, offset)
     }
 
-    pub(crate) fn data_block(&self, val: u32) -> DataBlockIndex {
-        DataBlockIndex::new(self.data_start as u32, val)
+    pub(crate) fn data_block(&self, val: usize) -> DataBlockIndex {
+        DataBlockIndex::new(self.data_start, val)
     }
 }
