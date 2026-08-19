@@ -13,6 +13,7 @@ pub mod filesystem;
 pub mod interrupts;
 pub mod kernel_layout;
 pub mod klog;
+pub mod logo;
 pub mod page_frame_allocator;
 pub mod page_table;
 pub mod println;

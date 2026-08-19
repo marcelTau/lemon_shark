@@ -15,7 +15,7 @@ impl KernelLayout {
     ///
     /// # Safety
     ///
-    /// Requires all used labels to be defined and properly aligned.
+    /// Requires all used labels to be defined and properly aligned. See `linker.ld`.
     pub unsafe fn from_labels() -> Self {
         unsafe extern "C" {
             static _kernel_start: u8;
@@ -25,14 +25,12 @@ impl KernelLayout {
             static _trap_stack_top: u8;
         }
 
-        unsafe {
-            Self {
-                kernel_start: core::ptr::addr_of!(_kernel_start) as usize,
-                kernel_end: core::ptr::addr_of!(_kernel_end) as usize,
-                heap_start: core::ptr::addr_of!(_heap_start) as usize,
-                heap_end: core::ptr::addr_of!(_heap_end) as usize,
-                trap_stack_top: core::ptr::addr_of!(_trap_stack_top) as usize,
-            }
+        Self {
+            kernel_start: core::ptr::addr_of!(_kernel_start) as usize,
+            kernel_end: core::ptr::addr_of!(_kernel_end) as usize,
+            heap_start: core::ptr::addr_of!(_heap_start) as usize,
+            heap_end: core::ptr::addr_of!(_heap_end) as usize,
+            trap_stack_top: core::ptr::addr_of!(_trap_stack_top) as usize,
         }
     }
 }

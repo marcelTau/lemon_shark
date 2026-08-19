@@ -8,7 +8,7 @@ mod common;
 
 use core::arch::global_asm;
 
-use lemon_shark::allocator::{FreeListAllocator, HeapBounds};
+use lemon_shark::allocator::FreeListAllocator;
 use lemon_shark::{timer, trap_handler};
 
 global_asm!(

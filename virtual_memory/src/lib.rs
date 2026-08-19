@@ -59,7 +59,7 @@ impl VirtAddr {
 ///
 /// The fact that pages are always 4k aligned, allows us to use the lower bits for something else.
 /// In the case of the PTE, the lower 10 bits are used for flags. Because we know that the page is
-/// 4k aligned, we can just << 12 the address and get the correct address without wasting space.
+/// 4k aligned, we can just `<< 12` the address and get the correct address without wasting space.
 ///
 /// The PPN take up 44 bits here, plus the lower 12 that we know are 0, this gives us 2^56 bytes
 /// address space.
@@ -178,7 +178,7 @@ impl PageTable {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::alloc::{Layout, alloc_zeroed};
+    use std::alloc::{alloc_zeroed, Layout};
 
     /// Allocate a single zeroed 4KB-aligned frame from the host allocator.
     fn alloc_test_frame() -> PhysAddr {
