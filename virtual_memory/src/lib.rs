@@ -1,5 +1,11 @@
 #![cfg_attr(not(test), no_std)]
 
+pub mod physical_range;
+
+pub use physical_range::{
+    PhysRange, PhysRangeError, normalize_ranges, usable_memory_ranges,
+};
+
 pub type PhysAddr = usize;
 pub const PAGE_SIZE: usize = 4096;
 

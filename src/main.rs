@@ -32,11 +32,13 @@ extern "C" fn _start(_: usize, device_table_addr: usize) -> ! {
     unsafe { ALLOCATOR.init(kernel_layout) };
 
     lemon_shark::klog::init();
+    log::info!("Kernel layout: {:#x?}", kernel_layout);
     log::warn!("========== Kernel started ==========");
 
     virtio2::init_console();
     trap_handler::init(kernel_layout);
-    device_tree::init(device_table_addr);
+    device_tree::init(device_table_addr).expect("failed to initialize device tree");
+
     interrupts::init();
 
     page_frame_allocator::init(kernel_layout);

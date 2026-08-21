@@ -1,115 +1,206 @@
-use core::str::FromStr;
-
 extern crate alloc;
+
 use alloc::string::String;
-
-/*
- memory@80000000 {
-        device_type = "memory"
-        reg = <0x80000000 0x8000000>
-    };
-
- reserved-memory {
-        #address-cells = <0x2>
-        #size-cells = <0x2>
-        ranges = []
-
-        mmode_resv1@80000000 {
-            reg = <0x80000000 0x40000>
-            no-map = []
-        };
-
-        mmode_resv0@80040000 {
-            reg = <0x80040000 0x20000>
-            no-map = []
-        };
-    };
-*/
+use alloc::vec::Vec;
+pub use virtual_memory::PhysRange;
+use virtual_memory::{PhysRangeError, normalize_ranges};
 
 static SYSINFO: spin::Once<SystemInfo> = spin::Once::new();
 
 #[derive(Debug)]
 struct SystemInfo {
-    pub timer_frequency: usize,
-    pub cpus: usize,
-    pub cpu_isa: String,
-    pub ram_base: usize,
-    pub total_memory: usize,
-    pub block_device_addr: usize,
+    timer_frequency: usize,
+    cpus: usize,
+    cpu_isa: String,
+    memory_regions: Vec<PhysRange>,
+    reserved_memory_regions: Vec<PhysRange>,
+    fdt_range: PhysRange,
+    total_memory: usize,
+    block_device_addr: usize,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum DeviceTreeError {
+    InvalidFdt,
+    AddressOverflow,
+    EmptyRange,
+    MissingMemoryReg,
+    MissingRegionSize,
+    NoMemoryRegions,
+    MalformedReservedMemory,
+    DynamicReservedMemoryUnsupported,
+    MissingCpu,
+    MissingCpuIsa,
+    InvalidCpuIsa,
+    MissingBlockDevice,
+    AlreadyInitialized,
+}
+
+impl From<PhysRangeError> for DeviceTreeError {
+    fn from(error: PhysRangeError) -> Self {
+        match error {
+            PhysRangeError::AddressOverflow => Self::AddressOverflow,
+            PhysRangeError::EmptyRange => Self::EmptyRange,
+        }
+    }
+}
+
+fn node_is_enabled(node: &fdt::node::FdtNode<'_, '_>) -> bool {
+    matches!(
+        node.property("status")
+            .and_then(|property| property.as_str()),
+        None | Some("okay") | Some("ok")
+    )
+}
+
+/// Collect all enabled nodes whose `device_type` is `memory`.
+fn collect_memory_regions(fdt: &fdt::Fdt<'_>) -> Result<Vec<PhysRange>, DeviceTreeError> {
+    let mut ranges = Vec::new();
+
+    for node in fdt.all_nodes().filter(node_is_enabled) {
+        let is_memory = node
+            .property("device_type")
+            .and_then(|property| property.as_str())
+            == Some("memory");
+
+        if !is_memory {
+            continue;
+        }
+
+        let regions = node.reg().ok_or(DeviceTreeError::MissingMemoryReg)?;
+
+        for region in regions {
+            let size = region.size.ok_or(DeviceTreeError::MissingRegionSize)?;
+
+            ranges.push(PhysRange::from_start_size(
+                region.starting_address as usize,
+                size,
+            )?);
+        }
+    }
+
+    if ranges.is_empty() {
+        return Err(DeviceTreeError::NoMemoryRegions);
+    }
+
+    Ok(normalize_ranges(ranges))
+}
+
+/// Collect both kinds of FDT reservations: entries in the binary memory
+/// reservation block and children of the `/reserved-memory` node.
+fn collect_reserved_memory_regions(fdt: &fdt::Fdt<'_>) -> Result<Vec<PhysRange>, DeviceTreeError> {
+    let mut ranges = Vec::new();
+
+    for reservation in fdt.memory_reservations() {
+        ranges.push(PhysRange::from_start_size(
+            reservation.address() as usize,
+            reservation.size(),
+        )?);
+    }
+
+    if let Some(parent) = fdt.find_node("/reserved-memory")
+        && node_is_enabled(&parent)
+    {
+        for child in parent.children().filter(node_is_enabled) {
+            if let Some(regions) = child.reg() {
+                for region in regions {
+                    let size = region.size.ok_or(DeviceTreeError::MissingRegionSize)?;
+
+                    ranges.push(PhysRange::from_start_size(
+                        region.starting_address as usize,
+                        size,
+                    )?);
+                }
+            } else if child.property("size").is_some() {
+                // Dynamic reservations must be placed before the general page
+                // frame allocator is initialized. We do not support that yet.
+                return Err(DeviceTreeError::DynamicReservedMemoryUnsupported);
+            } else {
+                return Err(DeviceTreeError::MalformedReservedMemory);
+            }
+        }
+    }
+
+    Ok(normalize_ranges(ranges))
 }
 
 impl SystemInfo {
-    pub fn new(fdt_addr: usize) -> Self {
+    fn new(fdt_addr: usize) -> Result<Self, DeviceTreeError> {
         let fdt = unsafe { fdt::Fdt::from_ptr(fdt_addr as *const u8) }
-            .expect("Could not read device tree");
+            .map_err(|_| DeviceTreeError::InvalidFdt)?;
 
-        // TODO(mt): Typically QEMU only has a single memory region. Also this region is placed
-        // after the reserved-memory which means we can use all of it as RAM and divide it up into
-        // pages. Technically again we should get the values from the device_tree and use them in
-        // the page frame allocator. But testing locally has confirmed, that the `_kernel_end`
-        // symbol comes after the reserved-memory and the .bss section as defined in the linker
-        // script, hence this should be safe to use right now.
-        let mut ram_base = 0;
-        let mut total_memory = 0;
-        for region in fdt.memory().regions() {
-            if ram_base == 0 {
-                ram_base = region.starting_address as usize;
-            }
-            if let Some(size) = region.size {
-                total_memory += size;
-            }
-        }
+        let memory_regions = collect_memory_regions(&fdt)?;
+        let reserved_memory_regions = collect_reserved_memory_regions(&fdt)?;
+        let fdt_range = PhysRange::from_start_size(fdt_addr, fdt.total_size())?;
+        let total_memory = memory_regions.iter().try_fold(0usize, |total, range| {
+            total
+                .checked_add(range.size())
+                .ok_or(DeviceTreeError::AddressOverflow)
+        })?;
 
         let mut block_device_addr = None;
 
         for node in fdt.all_nodes() {
-            // Check if it's a VirtIO MMIO device
-            if let Some(compatible) = node.compatible() {
-                if compatible.all().any(|s| s == "virtio,mmio") {
-                    // Get its MMIO address
-                    if let Some(mut reg) = node.reg() {
-                        if let Some(region) = reg.next() {
-                            let addr = region.starting_address as usize;
-                            // Probe to see if it's a block device
-                            unsafe {
-                                let device_id =
-                                    core::ptr::read_volatile((addr + 0x008) as *const u32);
-                                if device_id == 2 {
-                                    block_device_addr = Some(addr);
-                                }
-                            }
-                        }
-                    }
+            if let Some(compatible) = node.compatible()
+                && compatible.all().any(|s| s == "virtio,mmio")
+                && let Some(mut reg) = node.reg()
+                && let Some(region) = reg.next()
+            {
+                let addr = region.starting_address as usize;
+
+                // Probe the VirtIO device ID to distinguish the block device
+                // from the other VirtIO MMIO transports.
+                //
+                // TODO(mt): refer to docs here to avoid magic 0x008 value.
+                let device_id = unsafe { core::ptr::read_volatile((addr + 0x008) as *const u32) };
+                if device_id == 2 {
+                    block_device_addr = Some(addr);
                 }
             }
         }
 
-        let cpu = fdt.cpus().next().expect("No CPU?");
+        let cpu = fdt.cpus().next().ok_or(DeviceTreeError::MissingCpu)?;
+        let isa = cpu
+            .properties()
+            .find(|property| property.name == "riscv,isa")
+            .ok_or(DeviceTreeError::MissingCpuIsa)?;
+        let isa =
+            String::from_utf8(isa.value.to_vec()).map_err(|_| DeviceTreeError::InvalidCpuIsa)?;
+        let (base_isa, _) = isa.split_once('_').ok_or(DeviceTreeError::InvalidCpuIsa)?;
 
-        let isa = cpu.properties().find(|p| p.name == "riscv,isa");
-        let value = isa.expect("No CPU ISA found").value;
-        let str_value = alloc::string::String::from_utf8(value.to_vec()).expect("Invalid CPU ISA");
-        let (base_isa, _) = str_value.split_once('_').expect("Invalid CPU ISA");
-
-        SystemInfo {
+        let system_info = Self {
+            timer_frequency: cpu.timebase_frequency(),
             cpus: fdt.cpus().count(),
-            cpu_isa: String::from_str(base_isa).expect("Invalid CPU ISA"),
-            timer_frequency: fdt.cpus().next().expect("No cpu?").timebase_frequency(),
-            ram_base,
+            cpu_isa: String::from(base_isa),
+            memory_regions,
+            reserved_memory_regions,
+            fdt_range,
             total_memory,
-            block_device_addr: block_device_addr.expect("No block device found"),
-        }
+            block_device_addr: block_device_addr.ok_or(DeviceTreeError::MissingBlockDevice)?,
+        };
+
+        log::info!("memory regions: {:?}", system_info.memory_regions);
+        log::info!(
+            "reserved memory regions: {:?}",
+            system_info.reserved_memory_regions
+        );
+        log::info!("FDT range: {:x?}", system_info.fdt_range);
+
+        Ok(system_info)
     }
 }
 
-pub fn init(fdt_addr: usize) {
+pub fn init(fdt_addr: usize) -> Result<(), DeviceTreeError> {
     if SYSINFO.get().is_some() {
-        log::error!("Tried to re-initialize the system info struct");
-        return;
+        return Err(DeviceTreeError::AlreadyInitialized);
     }
 
-    SYSINFO.call_once(|| SystemInfo::new(fdt_addr));
+    SYSINFO
+        .try_call_once(|| SystemInfo::new(fdt_addr))
+        .map(|_| ())?;
+
     log::info!("initialized");
+    Ok(())
 }
 
 fn system_info() -> &'static SystemInfo {
@@ -126,8 +217,16 @@ pub fn cpus() -> usize {
     system_info().cpus
 }
 
-pub fn ram_base() -> usize {
-    system_info().ram_base
+pub(crate) fn memory_regions() -> &'static [PhysRange] {
+    &system_info().memory_regions
+}
+
+pub(crate) fn reserved_memory_regions() -> &'static [PhysRange] {
+    &system_info().reserved_memory_regions
+}
+
+pub(crate) fn fdt_range() -> PhysRange {
+    system_info().fdt_range
 }
 
 pub fn total_memory() -> usize {
@@ -142,11 +241,12 @@ pub fn block_device_addr() -> usize {
     system_info().block_device_addr
 }
 
-pub fn virtio_mmio_devices(fdt_addr: usize) -> alloc::vec::Vec<usize> {
+/// Return all VirtIO MMIO devices from an FDT supplied during early boot.
+pub fn virtio_mmio_devices(fdt_addr: usize) -> Vec<usize> {
     let fdt =
         unsafe { fdt::Fdt::from_ptr(fdt_addr as *const u8) }.expect("Could not read device tree");
 
-    let mut devices = alloc::vec::Vec::new();
+    let mut devices = Vec::new();
 
     for node in fdt.all_nodes() {
         if let Some(compatible) = node.compatible()
@@ -157,5 +257,6 @@ pub fn virtio_mmio_devices(fdt_addr: usize) -> alloc::vec::Vec<usize> {
             devices.push(region.starting_address as usize);
         }
     }
+
     devices
 }

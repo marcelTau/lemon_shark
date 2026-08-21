@@ -17,7 +17,7 @@ pub(crate) fn new_identity_map(phys: PhysAddr) {
 }
 
 /// This initializes the kernel page table, identity mapping all kernel pages and pages used for
-/// MMIO. We also identity map all RAM pages so that the kernel can reach them.
+/// MMIO. We also identity-map all allocator-managed RAM pages so that the kernel can reach them.
 ///
 /// NOTE: For now it's just mapping all kernel pages as READ | WRITE | EXECTUE.
 ///
@@ -46,27 +46,41 @@ pub fn init(kernel_layout: KernelLayout) {
         }
     }
 
-    // Identity-map all remaining RAM (kernel_end..ram_end) so that frames
-    // returned by the page frame allocator are always accessible as virtual
-    // addresses — needed when map() allocates intermediate page table nodes.
-    let ram_end = device_tree::ram_base() + device_tree::total_memory();
-    for page in (kernel_end..ram_end).step_by(PAGE_SIZE) {
-        let flags = pte_flags::READ | pte_flags::WRITE;
-        unsafe {
-            (*&raw mut KERNEL_PAGE_TABLE).map(VirtAddr(page), page, flags, alloc);
+    let id_map_region = |range: core::ops::Range<usize>, flags| {
+        for page in range.step_by(PAGE_SIZE) {
+            unsafe {
+                (*&raw mut KERNEL_PAGE_TABLE).map(VirtAddr(page), page, flags, alloc);
+            }
         }
+    };
+
+    // Identity-map every frame which the page frame allocator may return.
+    // Deliberately do not map holes or firmware `no-map` reservations.
+    for range in page_frame_allocator::managed_ranges() {
+        id_map_region(
+            range.start()..range.end(),
+            pte_flags::READ | pte_flags::WRITE,
+        );
     }
+
+    // Keep the live FDT readable after paging is enabled. The allocator has
+    // excluded every page touched by this range, so these mappings cannot
+    // alias an allocated frame.
+    let fdt_range = device_tree::fdt_range();
+    let fdt_start = fdt_range.start() & !(PAGE_SIZE - 1);
+    let fdt_end = fdt_range
+        .end()
+        .checked_add(PAGE_SIZE - 1)
+        .expect("FDT range overflow")
+        & !(PAGE_SIZE - 1);
+
+    id_map_region(fdt_start..fdt_end, pte_flags::READ);
 
     // Those include the UART & virtio MMIO ranges
     let mmio_start = 0x10000000;
-    let mmio_end = 0x10008000;
+    let mmio_end = 0x10009000;
 
-    for page in (mmio_start..=mmio_end).step_by(PAGE_SIZE) {
-        let flags = pte_flags::READ | pte_flags::WRITE;
-        unsafe {
-            (*&raw mut KERNEL_PAGE_TABLE).map(VirtAddr(page), page, flags, alloc);
-        }
-    }
+    id_map_region(mmio_start..mmio_end, pte_flags::READ | pte_flags::WRITE);
 
     // TODO(mt): This becomes important when implementing processes. The ASID is used in the TLB to
     // avoid flushing the TLB on context switches. Each process has it's own ASID (limited to
