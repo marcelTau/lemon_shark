@@ -1,7 +1,6 @@
 extern crate alloc;
 use core::str::FromStr;
 
-use crate::dump_memory;
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -154,6 +153,48 @@ fn read_line_and_display(history: &CommandHistory) -> String {
 
 fn hello() {
     println!("Hello there :)");
+}
+
+fn percentage_tenths(part: usize, total: usize) -> usize {
+    if total == 0 {
+        return 0;
+    }
+
+    part.saturating_mul(1000).saturating_add(total / 2) / total
+}
+
+fn memory() {
+    // Take a snapshot so the allocator lock is released before writing to the UART.
+    let stats = crate::ALLOCATOR.stats();
+    let used_percent = percentage_tenths(stats.used, stats.total);
+    let free_percent = percentage_tenths(stats.free, stats.total);
+
+    println!("Heap memory:");
+    println!(
+        "  Used:  {} bytes ({} KiB, {}.{}%)",
+        stats.used,
+        stats.used / 1024,
+        used_percent / 10,
+        used_percent % 10,
+    );
+    println!(
+        "  Free:  {} bytes ({} KiB, {}.{}%)",
+        stats.free,
+        stats.free / 1024,
+        free_percent / 10,
+        free_percent % 10,
+    );
+    println!(
+        "  Total: {} bytes ({} KiB)",
+        stats.total,
+        stats.total / 1024,
+    );
+    println!("  Free blocks: {}", stats.free_blocks);
+    println!(
+        "  Largest free block: {} bytes ({} KiB)",
+        stats.largest_free_block,
+        stats.largest_free_block / 1024,
+    );
 }
 
 fn exit() {
@@ -331,7 +372,7 @@ impl ShellCommand {
             ShellCommand::Hello => hello(),
             ShellCommand::Exit => exit(),
             ShellCommand::SysInfo => sysinfo(),
-            ShellCommand::MemoryDump => dump_memory(),
+            ShellCommand::MemoryDump => memory(),
             ShellCommand::Bench { n, size } => benchmark_allocator(*n, *size),
             ShellCommand::Allocate { size } => shell_allocate(*size),
             ShellCommand::Timer { secs } => crate::timer::new_time(*secs),

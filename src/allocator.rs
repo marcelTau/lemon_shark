@@ -1,10 +1,9 @@
 use core::alloc::{GlobalAlloc, Layout};
 
-pub use allocator::FreeListAllocator;
+pub use allocator::{FreeListAllocator, MemoryStats};
 
 use crate::interrupts;
 use crate::kernel_layout::KernelLayout;
-use crate::println::UartWriter;
 
 pub struct HeapBounds {
     pub start: usize,
@@ -32,11 +31,7 @@ pub struct LockedAllocator {
 impl LockedAllocator {
     pub const fn new() -> Self {
         Self {
-            inner: spin::Mutex::new(FreeListAllocator {
-                head: None,
-                #[cfg(feature = "stats")]
-                stats: AllocationStats::new(),
-            }),
+            inner: spin::Mutex::new(FreeListAllocator::new()),
         }
     }
 
@@ -48,9 +43,8 @@ impl LockedAllocator {
         unsafe { (*self.inner.lock()).init(bounds.start, bounds.end) };
     }
 
-    pub fn dump_state(&self) {
-        let mut writer = UartWriter;
-        (*self.inner.lock()).dump_state(&mut writer);
+    pub fn stats(&self) -> MemoryStats {
+        (*self.inner.lock()).stats()
     }
 }
 

@@ -50,10 +50,6 @@ fn panic_handler(info: &PanicInfo) -> ! {
 #[global_allocator]
 pub static ALLOCATOR: LockedAllocator = LockedAllocator::new();
 
-pub fn dump_memory() {
-    ALLOCATOR.dump_state();
-}
-
 pub fn test_runner(tests: &[&dyn Testable]) {
     println!("\nRunning {} tests...\n", tests.len());
     for test in tests {

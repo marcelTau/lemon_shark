@@ -95,9 +95,19 @@ pub struct AllocationMetaData {
     pub size: usize,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct MemoryStats {
+    pub total: usize,
+    pub used: usize,
+    pub free: usize,
+    pub free_blocks: usize,
+    pub largest_free_block: usize,
+}
+
 #[derive(Default)]
 pub struct FreeListAllocator {
     pub head: Option<AlignedPtr<FreeBlock>>,
+    total_size: usize,
 }
 
 // SAFETY: The manual implementation is necessary as the `FreeListAllocator`
@@ -107,6 +117,13 @@ pub struct FreeListAllocator {
 unsafe impl Send for FreeListAllocator {}
 
 impl FreeListAllocator {
+    pub const fn new() -> Self {
+        Self {
+            head: None,
+            total_size: 0,
+        }
+    }
+
     /// Initialize the allocator with an explicit heap range.
     ///
     /// # Safety
@@ -120,6 +137,7 @@ impl FreeListAllocator {
         unsafe {
             (*aligned_ptr.as_ptr()).size = heap_size - mem::size_of::<FreeBlock>();
             (*aligned_ptr.as_ptr()).next = None;
+            self.total_size = (*aligned_ptr.as_ptr()).size;
 
             log::info!(
                 "[ALLOC] Initialized allocator at {:#x} with size of {:#x} ({}KB)",
@@ -130,6 +148,14 @@ impl FreeListAllocator {
         }
 
         self.head = Some(aligned_ptr);
+    }
+
+    pub fn total(&self) -> usize {
+        self.total_size
+    }
+
+    pub fn used(&self) -> usize {
+        self.total_size.saturating_sub(self.free())
     }
 
     pub fn free(&self) -> usize {
@@ -152,6 +178,28 @@ impl FreeListAllocator {
         });
 
         total
+    }
+
+    pub fn stats(&self) -> MemoryStats {
+        let mut free = 0;
+        let mut free_blocks = 0;
+        let mut largest_free_block = 0;
+
+        let _ = Self::walk_list(self.head, |current, _| {
+            let size = unsafe { (*current.as_ptr()).size };
+            free += size;
+            free_blocks += 1;
+            largest_free_block = largest_free_block.max(size);
+            ControlFlow::<(), _>::Continue(())
+        });
+
+        MemoryStats {
+            total: self.total_size,
+            used: self.total_size.saturating_sub(free),
+            free,
+            free_blocks,
+            largest_free_block,
+        }
     }
 
     fn walk_list<F, R>(start: Option<AlignedPtr<FreeBlock>>, mut f: F) -> Option<R>
@@ -356,45 +404,6 @@ impl FreeListAllocator {
             }
         }
     }
-
-    pub fn dump_state(&self, out: &mut impl core::fmt::Write) {
-        if self.head.is_none() {
-            let _ = out.write_str("========== ALLOCATOR DUMP ==========\n");
-            let _ = out.write_str("No more free memory :(\n");
-            let _ = out.write_str("====================================\n");
-            return;
-        }
-
-        let mut i = 0;
-        let start_addr = self.head.unwrap().as_addr();
-        let mut total_size = 0;
-
-        let _ = core::fmt::write(out, format_args!("========== ALLOCATOR DUMP ==========\n"));
-        let _ = core::fmt::write(out, format_args!("Allocator starting at {start_addr:#x}\n"));
-
-        unsafe {
-            Self::walk_list(self.head, |current, _| {
-                let _ = core::fmt::write(
-                    out,
-                    format_args!(
-                        "  Block {i} at={:#0x} size={} next={:?}\n",
-                        current.as_addr(),
-                        (*current.as_ptr()).size,
-                        (*current.as_ptr()).next
-                    ),
-                );
-                total_size += (*current.as_ptr()).size;
-                if (*current.as_ptr()).next.is_none() {
-                    return ControlFlow::Break(());
-                }
-                i += 1;
-                ControlFlow::Continue(())
-            });
-        }
-
-        let _ = core::fmt::write(out, format_args!("Total free memory: {total_size} bytes\n"));
-        let _ = out.write_str("====================================\n");
-    }
 }
 
 #[cfg(test)]
@@ -453,17 +462,6 @@ mod tests {
         fn dealloc(&mut self, ptr: *mut u8, layout: core::alloc::Layout) {
             self.alloc.dealloc(ptr, layout)
         }
-        fn dump_state(&self, out: &mut impl core::fmt::Write) {
-            self.alloc.dump_state(out)
-        }
-    }
-
-    // Sink for dump_state() output — discards everything.
-    struct NullWriter;
-    impl core::fmt::Write for NullWriter {
-        fn write_str(&mut self, _s: &str) -> core::fmt::Result {
-            Ok(())
-        }
     }
 
     // -----------------------------------------------------------------------
@@ -473,6 +471,33 @@ mod tests {
     #[test]
     fn allocator_init() {
         let _heap = make_alloc();
+    }
+
+    #[test]
+    fn memory_usage_tracks_allocations() {
+        let mut alloc = make_alloc();
+        let total = alloc.total();
+
+        assert_eq!(alloc.free(), total);
+        assert_eq!(alloc.used(), 0);
+
+        let layout = Layout::from_size_align(1024, 8).unwrap();
+        let ptr = alloc.alloc(layout);
+
+        assert!(!ptr.is_null());
+        assert!(alloc.used() >= layout.size());
+        assert_eq!(alloc.used() + alloc.free(), total);
+
+        let stats = alloc.stats();
+        assert_eq!(stats.total, total);
+        assert_eq!(stats.used, alloc.used());
+        assert_eq!(stats.free, alloc.free());
+        assert_eq!(stats.free_blocks, alloc.free_blocks());
+        assert!(stats.largest_free_block <= stats.free);
+
+        alloc.dealloc(ptr, layout);
+        assert_eq!(alloc.used(), 0);
+        assert_eq!(alloc.free(), total);
     }
 
     #[test]
@@ -539,8 +564,6 @@ mod tests {
         alloc.dealloc(right, layout);
         assert_eq!(alloc.free_blocks(), 1);
         assert_eq!(alloc.free(), initial_free);
-
-        alloc.dump_state(&mut NullWriter);
     }
 
     #[test]
@@ -567,8 +590,6 @@ mod tests {
         alloc.dealloc(e, layout_64);
 
         alloc.dealloc(d, layout_16);
-
-        alloc.dump_state(&mut NullWriter);
 
         assert_eq!(alloc.free_blocks(), 1);
         assert_eq!(init, alloc.free());

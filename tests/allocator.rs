@@ -118,8 +118,6 @@ fn fragmentation_and_merge() {
     alloc.dealloc(right, layout);
     assert_eq!(alloc.free_blocks(), 1);
     assert_eq!(alloc.free(), initial_free);
-
-    alloc.dump_state(&mut UartWriter);
 }
 
 #[test_case]
@@ -146,8 +144,6 @@ fn fragmentation_and_merging2() {
     alloc.dealloc(e, layout_64);
 
     alloc.dealloc(d, layout_16);
-
-    alloc.dump_state(&mut UartWriter);
 
     assert_eq!(alloc.free_blocks(), 1);
     assert_eq!(init, alloc.free());
