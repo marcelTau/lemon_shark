@@ -10,16 +10,68 @@ use crate::timer;
 
 use crate::{print, println};
 
+const HISTORY_CAPACITY: usize = 100;
+
+struct CommandHistory {
+    entries: Vec<String>,
+}
+
+impl CommandHistory {
+    fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+        }
+    }
+
+    fn push(&mut self, line: String) {
+        if line.trim().is_empty() {
+            return;
+        }
+
+        if self.entries.last() == Some(&line) {
+            return;
+        }
+
+        if self.entries.len() == HISTORY_CAPACITY {
+            self.entries.remove(0);
+        }
+
+        self.entries.push(line);
+    }
+
+    fn print(&self) {
+        for (index, command) in self.entries.iter().enumerate() {
+            println!("{:>4}  {command}", index + 1);
+        }
+    }
+}
+
+enum InputState {
+    Normal,
+    Escape,
+    ControlSequence,
+}
+
+fn redraw_line(line: &str) {
+    print!("\r\x1b[2K> {line}");
+}
+
 /// To read from the UART, we need to check wether there is some data available
 /// by reading the Line status register and check for the set bit.
-fn read_line_and_display() -> String {
+fn read_line_and_display(history: &CommandHistory) -> String {
     const UART: usize = 0x10_000_000;
     const RECEIVE_BUFFER_REGISTER_OFFSET: usize = 0;
     const LINE_STATUS_REGISTER_OFFSET: usize = 5;
+    const ASCII_ESCAPE: u8 = 27;
+    const ASCII_BACKSPACE: u8 = 8;
+    const ASCII_DELETE: u8 = 127;
 
     let uart = UART as *const u8;
 
     let mut s = String::new();
+    let mut draft = String::new();
+    let mut history_index = history.entries.len();
+    let mut input_state = InputState::Normal;
 
     print!("> ");
 
@@ -31,12 +83,59 @@ fn read_line_and_display() -> String {
                 // TODO(mt): I don't know if this is just QEMU but when pressing
                 // enter, it first does a '\r' so we can use this to end the
                 // line.
-                if c == 13 {
+                if c == b'\r' {
                     print!("\n");
                     break;
                 }
 
-                if c == 127 {
+                match input_state {
+                    InputState::Escape => {
+                        // ANSI control sequences begin with ESC followed by `[`. Arrow
+                        // keys then provide one final byte identifying the direction.
+                        input_state = if c == b'[' {
+                            InputState::ControlSequence
+                        } else {
+                            InputState::Normal
+                        };
+                        continue;
+                    }
+                    InputState::ControlSequence => {
+                        input_state = InputState::Normal;
+
+                        match c {
+                            b'A' if history_index > 0 => {
+                                // ESC [ A: Up arrow
+                                if history_index == history.entries.len() {
+                                    draft = s.clone();
+                                }
+                                history_index -= 1;
+                                s.clone_from(&history.entries[history_index]);
+                                redraw_line(&s);
+                            }
+                            b'B' if history_index < history.entries.len() => {
+                                // ESC [ B: Down arrow
+                                history_index += 1;
+                                if history_index == history.entries.len() {
+                                    s.clone_from(&draft);
+                                } else {
+                                    s.clone_from(&history.entries[history_index]);
+                                }
+                                redraw_line(&s);
+                            }
+                            _ => {}
+                        }
+                        continue;
+                    }
+                    InputState::Normal => {}
+                }
+
+                if c == ASCII_ESCAPE {
+                    input_state = InputState::Escape;
+                    continue;
+                }
+
+                // Terminals commonly send either DEL or BS for the backspace key.
+                if c == ASCII_DELETE || c == ASCII_BACKSPACE {
                     if s.pop().is_some() {
                         print!("\x08 \x08");
                     }
@@ -91,6 +190,7 @@ fn help() {
     println!("  write <file> <text> -- write text to the file");
     println!("  tree                -- show a tree view of the filesystem");
     println!("  flush               -- flush filesystem metadata to disk");
+    println!("  history             -- show recently entered commands");
     println!("  allocate <n>        -- allocate memory of size n to test the kernel allocator");
 }
 
@@ -154,6 +254,7 @@ enum ShellCommand {
     Rm { path: String },
     Tree,
     Flush,
+    History,
 }
 
 impl ShellCommand {
@@ -174,6 +275,7 @@ impl ShellCommand {
             "uptime" => ShellCommand::Uptime,
             "sysinfo" => ShellCommand::SysInfo,
             "tree" => ShellCommand::Tree,
+            "history" => ShellCommand::History,
             "bench" => {
                 let n = parts.get(1).and_then(|n| n.parse().ok())?;
                 let size = parts.get(2).and_then(|n| n.parse().ok())?;
@@ -223,7 +325,7 @@ impl ShellCommand {
         Some(command)
     }
 
-    fn call(&self) {
+    fn call(&self, history: &CommandHistory) {
         match self {
             ShellCommand::Help => help(),
             ShellCommand::Hello => hello(),
@@ -275,6 +377,7 @@ impl ShellCommand {
             ShellCommand::Flush => {
                 crate::filesystem::api::flush();
             }
+            ShellCommand::History => history.print(),
         }
     }
 }
@@ -282,11 +385,14 @@ impl ShellCommand {
 /// This spawns a simple shell which let's the user input some commands
 /// and reads from the UART and outputs something based on the command.
 pub fn shell() -> ! {
+    let mut history = CommandHistory::new();
+
     loop {
-        let line = read_line_and_display();
+        let line = read_line_and_display(&history);
+        history.push(line.clone());
 
         match ShellCommand::from_line(&line) {
-            Some(command) => command.call(),
+            Some(command) => command.call(&history),
             None => println!("ShellCommand not found: '{line}'"),
         }
     }
