@@ -47,6 +47,9 @@ pub fn init(kernel_layout: KernelLayout) {
     }
 
     let id_map_region = |range: core::ops::Range<usize>, flags| {
+        debug_assert!(range.start.is_multiple_of(PAGE_SIZE));
+        debug_assert!(range.end.is_multiple_of(PAGE_SIZE));
+
         for page in range.step_by(PAGE_SIZE) {
             unsafe {
                 (*&raw mut KERNEL_PAGE_TABLE).map(VirtAddr(page), page, flags, alloc);
@@ -57,30 +60,20 @@ pub fn init(kernel_layout: KernelLayout) {
     // Identity-map every frame which the page frame allocator may return.
     // Deliberately do not map holes or firmware `no-map` reservations.
     for range in page_frame_allocator::managed_ranges() {
-        id_map_region(
-            range.start()..range.end(),
-            pte_flags::READ | pte_flags::WRITE,
-        );
+        id_map_region(range.range(), pte_flags::READ | pte_flags::WRITE);
     }
 
     // Keep the live FDT readable after paging is enabled. The allocator has
     // excluded every page touched by this range, so these mappings cannot
     // alias an allocated frame.
-    let fdt_range = device_tree::fdt_range();
-    let fdt_start = fdt_range.start() & !(PAGE_SIZE - 1);
-    let fdt_end = fdt_range
-        .end()
-        .checked_add(PAGE_SIZE - 1)
-        .expect("FDT range overflow")
-        & !(PAGE_SIZE - 1);
+    let fdt_range = device_tree::fdt_range()
+        .covering_pages()
+        .expect("FDT range overflow");
+    id_map_region(fdt_range.range(), pte_flags::READ);
 
-    id_map_region(fdt_start..fdt_end, pte_flags::READ);
-
-    // Those include the UART & virtio MMIO ranges
-    let mmio_start = 0x10000000;
-    let mmio_end = 0x10009000;
-
-    id_map_region(mmio_start..mmio_end, pte_flags::READ | pte_flags::WRITE);
+    for range in device_tree::system_mmio_regions() {
+        id_map_region(range.range(), pte_flags::READ | pte_flags::WRITE);
+    }
 
     // TODO(mt): This becomes important when implementing processes. The ASID is used in the TLB to
     // avoid flushing the TLB on context switches. Each process has it's own ASID (limited to

@@ -55,3 +55,13 @@ fn virtio_mmio_device_present() {
         devices
     );
 }
+
+#[test_case]
+fn kernel_mmio_regions_cover_uart_and_virtio_devices() {
+    let fdt_addr = unsafe { FDT_ADDR };
+    let regions = device_tree::mmio_regions(fdt_addr).unwrap();
+
+    assert_eq!(regions.len(), 1, "unexpected MMIO ranges: {regions:?}");
+    assert_eq!(regions[0].start(), 0x10000000);
+    assert_eq!(regions[0].end(), 0x10009000);
+}

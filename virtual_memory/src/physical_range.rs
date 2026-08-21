@@ -43,8 +43,20 @@ impl PhysRange {
         self.end
     }
 
+    pub const fn range(self) -> core::ops::Range<usize> {
+        self.start..self.end
+    }
+
     pub const fn size(self) -> usize {
         self.end - self.start
+    }
+
+    /// Expand this byte range to the complete pages which contain it.
+    pub fn covering_pages(self) -> Result<Self, PhysRangeError> {
+        let start = align_down(self.start);
+        let end = align_up(self.end).ok_or(PhysRangeError::AddressOverflow)?;
+
+        Ok(Self { start, end })
     }
 }
 
@@ -164,6 +176,35 @@ mod tests {
     #[test]
     fn no_memory_produces_no_usable_ranges() {
         assert_usable(&[], &[(0x1000, 0x2000)], &[]);
+    }
+
+    #[test]
+    fn range_returns_half_open_address_range() {
+        assert_eq!(range(0x1000, 0x5000).range(), 0x1000..0x5000);
+    }
+
+    #[test]
+    fn covering_pages_expands_unaligned_range() {
+        assert_eq!(
+            range(0x1234, 0x4321).covering_pages().unwrap(),
+            range(0x1000, 0x5000)
+        );
+    }
+
+    #[test]
+    fn covering_pages_preserves_aligned_range() {
+        assert_eq!(
+            range(0x2000, 0x5000).covering_pages().unwrap(),
+            range(0x2000, 0x5000)
+        );
+    }
+
+    #[test]
+    fn covering_pages_detects_end_overflow() {
+        assert_eq!(
+            range(usize::MAX - 1, usize::MAX).covering_pages(),
+            Err(PhysRangeError::AddressOverflow)
+        );
     }
 
     #[test]
