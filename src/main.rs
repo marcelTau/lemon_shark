@@ -32,8 +32,8 @@ extern "C" fn _start(_: usize, device_table_addr: usize) -> ! {
     unsafe { ALLOCATOR.init(kernel_layout) };
 
     lemon_shark::klog::init();
-    log::info!("Kernel layout: {:#x?}", kernel_layout);
     log::warn!("========== Kernel started ==========");
+    log::info!("{kernel_layout:#x?}");
 
     virtio2::init_console();
     trap_handler::init(kernel_layout);

@@ -135,8 +135,6 @@ impl<const N: usize> core::fmt::Write for StackString<N> {
 static KERNEL_LOGGER: KernelLogger = KernelLogger;
 
 pub fn init() {
-    log::set_logger(&KERNEL_LOGGER).ok();
+    log::set_logger(&KERNEL_LOGGER).expect("failed to set logger");
     log::set_max_level(log::LevelFilter::Debug);
-
-    log::debug!("initialized");
 }
