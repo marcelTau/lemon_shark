@@ -18,6 +18,7 @@ pub mod page_frame_allocator;
 pub mod page_table;
 pub mod println;
 pub mod ramdisk;
+pub mod riscv;
 pub mod scheduler;
 pub mod shell;
 pub mod timer;

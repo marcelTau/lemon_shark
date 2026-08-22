@@ -2,9 +2,7 @@
 
 pub mod physical_range;
 
-pub use physical_range::{
-    PhysRange, PhysRangeError, normalize_ranges, usable_memory_ranges,
-};
+pub use physical_range::{PhysRange, PhysRangeError, normalize_ranges, usable_memory_ranges};
 
 pub type PhysAddr = usize;
 pub const PAGE_SIZE: usize = 4096;
@@ -16,7 +14,11 @@ pub const PAGE_SIZE: usize = 4096;
 /// |    0    | L2 idx | L1 idx | L0 idx | page offset |
 /// +---------+--------+--------+--------+-------------+
 ///
-/// docs: https://www.scs.stanford.edu/~zyedidia/docs/riscv/riscv-privileged.pdf Section 4.4
+/// # References
+///
+/// [RISC-V Privileged Architecture, Section 4.4 — Sv39][riscv-privileged-sv39]
+///
+/// [riscv-privileged-sv39]: https://www.scs.stanford.edu/~zyedidia/docs/riscv/riscv-privileged.pdf
 pub struct VirtAddr(pub usize);
 
 pub enum Level {
@@ -28,6 +30,7 @@ pub enum Level {
 impl VirtAddr {
     pub fn vpn(&self, level: Level) -> usize {
         let val = self.0;
+        // `& 0x1FF` to only keep the low 9 bits that make up the VPN index.
         match level {
             Level::L0 => (val >> 12) & 0x1FF,
             Level::L1 => (val >> 21) & 0x1FF,
@@ -44,22 +47,25 @@ impl VirtAddr {
     }
 }
 
-/// A page table entry always has the following format.
+/// A `PageTableEntry` always has the following format.
 ///
+/// ```
 /// 63           54 53        28 27        19 18        10 9     8 7 6 5 4 3 2 1 0
 /// +---------------+------------+------------+------------+-----+-+-+-+-+-+-+-+-+
 /// |    Reserved   | PPN[2]     | PPN[1]     | PPN[0]     | RSW |D|A|G|U|X|W|R|V|
 /// +---------------+------------+------------+------------+-----+-+-+-+-+-+-+-+-+
+/// ```
 ///
-/// bit 0: valid (must be 1, if not MMU ignores this page)
-/// bit 1: read
-/// bit 2: write
-/// bit 3: execute
-/// bit 4: user - accessible from U-mode (userspace)
-/// bit 5: global - mapping exists in all address spaces (useful for the kernel pages as discussed
-///                 below)
-/// bit 6: accessed - hardware sets this when page is read/written
-/// bit 7: dirty - hardware sets this when page is written
+/// | Bit | Name     | Meaning |
+/// |-----|----------|---------|
+/// | 0   | Valid    | Must be set or the MMU ignores the entry. |
+/// | 1   | Read     | Page is readable. |
+/// | 2   | Write    | Page is writable. |
+/// | 3   | Execute  | Page is executable. |
+/// | 4   | User     | Page is accessible from U-mode (userspace). |
+/// | 5   | Global   | Mapping exists in all address spaces (useful for kernel pages). |
+/// | 6   | Accessed | Hardware sets this when the page is read or written. |
+/// | 7   | Dirty    | Hardware sets this when the page is written. |
 ///
 /// Non-leaf nodes have all permissions 0 - leaf nodes must have at least one non-zero of (R/W/X)
 ///
@@ -70,17 +76,63 @@ impl VirtAddr {
 /// The PPN take up 44 bits here, plus the lower 12 that we know are 0, this gives us 2^56 bytes
 /// address space.
 ///
-/// docs: https://www.scs.stanford.edu/~zyedidia/docs/riscv/riscv-privileged.pdf Section 4.4
+/// # References
+///
+/// [RISC-V Privileged Architecture, Section 4.4 — Sv39][riscv-privileged-sv39]
+///
+/// [riscv-privileged-sv39]: https://www.scs.stanford.edu/~zyedidia/docs/riscv/riscv-privileged.pdf
 pub struct PageTableEntry(usize);
 
+/// Bit masks for the low-order flag fields of an Sv39 page-table entry.
+///
+/// Combine these flags when constructing a leaf [`PageTableEntry`]. A valid
+/// non-leaf entry has [`VALID`](pte_flags::VALID) set and the
+/// [`READ`](pte_flags::READ), [`WRITE`](pte_flags::WRITE), and
+/// [`EXECUTE`](pte_flags::EXECUTE) flags clear.
+///
+/// # References
+///
+/// [RISC-V Privileged Architecture, Section 4.4 — Sv39][riscv-privileged-sv39]
+///
+/// [riscv-privileged-sv39]: https://www.scs.stanford.edu/~zyedidia/docs/riscv/riscv-privileged.pdf
 pub mod pte_flags {
+    /// Indicates that the page-table entry is valid.
+    ///
+    /// When this flag is clear, the hardware ignores every other field in the
+    /// entry and raises a page-fault exception when the entry is encountered.
     pub const VALID: usize = 1;
+
+    /// Allows loads from the mapped page.
     pub const READ: usize = 1 << 1;
+
+    /// Allows stores to the mapped page.
+    ///
+    /// Setting this flag without [`READ`] is an invalid PTE encoding reserved
+    /// for future use by the RISC-V architecture.
     pub const WRITE: usize = 1 << 2;
+
+    /// Allows instruction fetches from the mapped page.
     pub const EXECUTE: usize = 1 << 3;
+
+    /// Allows U-mode software to access the mapped page.
+    ///
+    /// When this flag is clear, the page is not accessible from U-mode.
     pub const USER: usize = 1 << 4;
+
+    /// Marks the mapping as global across address spaces.
+    ///
+    /// Global mappings need not be flushed from address-translation caches
+    /// when an address-space identifier changes.
     pub const GLOBAL: usize = 1 << 5;
+
+    /// Indicates that the mapped page has been read, written, or fetched.
+    ///
+    /// Hardware sets this flag when the page is accessed.
     pub const ACCESSED: usize = 1 << 6;
+
+    /// Indicates that the mapped page has been written.
+    ///
+    /// Hardware sets this flag when a store modifies the page.
     pub const DIRTY: usize = 1 << 7;
 }
 
@@ -115,6 +167,7 @@ impl PageTableEntry {
     }
 }
 
+/// A `PageTable` is exactly `PAGE_SIZE` (4096) bytes in size and stores exactly 512 [`PageTableEntry`]s.
 #[repr(C)]
 #[repr(align(4096))]
 pub struct PageTable {
@@ -150,7 +203,9 @@ impl PageTable {
     ///
     /// Intermediate page tables are allocated on demand using `alloc`.
     ///
-    /// SAFETY: `alloc` must return valid 4KB-aligned physical frames. All physical addresses must
+    /// # Safety
+    ///
+    /// `alloc` must return valid 4KB-aligned physical frames. All physical addresses must
     /// be accessible (identity-mapped or otherwise reachable) at the time of the call.
     pub unsafe fn map<F>(&mut self, virt: VirtAddr, phys: PhysAddr, flags: usize, alloc: F)
     where
@@ -184,7 +239,7 @@ impl PageTable {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::alloc::{alloc_zeroed, Layout};
+    use std::alloc::{Layout, alloc_zeroed};
 
     /// Allocate a single zeroed 4KB-aligned frame from the host allocator.
     fn alloc_test_frame() -> PhysAddr {
