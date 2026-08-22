@@ -1,0 +1,1 @@
+This is the file `foo` in a nested directory. Wow such cool that this works lol.

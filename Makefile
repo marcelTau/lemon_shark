@@ -11,7 +11,7 @@ ARGS := -machine virt \
 		-display none \
 		-chardev stdio,id=con,signal=on \
 		-serial chardev:con \
-		-drive file=lemonfs.img,if=none,format=raw,id=hd0 \
+		-drive file=root.img,if=none,format=raw,id=hd0 \
 		-device virtio-blk-device,drive=hd0 \
 		-chardev file,id=log,path=kernel.log \
 		-device virtio-serial-device \
@@ -35,8 +35,7 @@ generate_device_tree:
 		@rm qemu.dtb
 
 fs:
-	rm lemonfs.img || true
-	cargo run -p mkfs --target x86_64-unknown-linux-gnu
+	cargo run -p mkfs --target x86_64-unknown-linux-gnu --
 
 
 run:
