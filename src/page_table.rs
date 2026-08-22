@@ -75,7 +75,7 @@ pub fn init(kernel_layout: KernelLayout) {
     let kernel_page_table_addr = &raw const KERNEL_PAGE_TABLE as usize;
     let satp = Satp::new(SatpMode::Sv39, Asid::KERNEL, kernel_page_table_addr);
 
-    riscv::write_satp_and_flush_tlb(satp);
+    riscv::asm::write_satp_and_flush_tlb(satp);
 
     // We added mappings of the kernel pages to the upper half of the address
     // space (0xFFFF_FFFF_0000_0000). This is an optimization for the time when

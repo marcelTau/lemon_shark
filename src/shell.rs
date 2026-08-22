@@ -5,7 +5,7 @@ use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use crate::timer;
+use crate::riscv;
 
 use crate::{print, println};
 
@@ -259,7 +259,7 @@ fn benchmark_allocator(n: usize, size: usize) {
     let mut allocations: Vec<Vec<u8>> = Vec::new();
 
     let freq = crate::device_tree::timer_frequency() / 1000;
-    let start = timer::rdtime() / freq;
+    let start = riscv::asm::rdtime() / freq;
 
     // Current memory size is 1024Kb
     for _ in 0..n {
@@ -271,7 +271,7 @@ fn benchmark_allocator(n: usize, size: usize) {
         drop(alloc);
     }
 
-    let end = timer::rdtime() / freq;
+    let end = riscv::asm::rdtime() / freq;
 
     println!("Took: {}ms", end - start);
 }

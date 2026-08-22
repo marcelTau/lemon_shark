@@ -2,6 +2,9 @@ use core::arch::asm;
 use core::arch::naked_asm;
 
 use crate::kernel_layout::KernelLayout;
+use crate::riscv;
+use crate::riscv::ScauseReason;
+use crate::riscv::Stvec;
 
 /// Saved state of a process at the point it was interrupted.
 ///
@@ -93,79 +96,6 @@ static mut INITIAL_TRAP_FRAME: TrapFrame = TrapFrame::zero();
 /// TODO(mt): clean that up
 pub(crate) fn kernel_sp() -> usize {
     unsafe { INITIAL_TRAP_FRAME.kernel_sp }
-}
-
-#[derive(Debug, PartialEq)]
-enum ScauseReason {
-    // interrupts
-    UserSoftwareInterrupt,
-    SupervisorSoftwareInterrupt,
-    UserTimerInterrupt,
-    SupervisorTimerInterrupt,
-    UserExternalInterrupt,
-    SupervisorExternalInterrupt,
-
-    // exceptions
-    InstructionAddressMisaligned,
-    InstructionAccessFault,
-    IllegalInstruction,
-    Breakpoint,
-    LoadAccessFault,
-    AmoAddressMisaligned,
-    StoreAmoAccessFault,
-    EnvironmentCall,
-
-    // TODO(mt): when looking into semihosting again, 0x3f is the code for a
-    // semihost operation in qemu: https://github.com/qemu/qemu/blob/master/target/riscv/cpu_bits.h#L785
-    //
-    // Don't know if this is useful as with the latest try, we could not manage
-    // to make qemu read the ebreak call as openSBI only reads things in
-    // m-mode and we capture the breakpoint exception in s-mode.
-    Reserved,
-}
-
-/// https://people.eecs.berkeley.edu/~krste/papers/riscv-privileged-v1.9.1.pdf
-/// Section 4.1.8 (Supervisor Cause Register)
-#[repr(transparent)]
-struct Scause(usize);
-
-impl Scause {
-    fn is_interrupt(&self) -> bool {
-        (self.0 & (1 << (usize::BITS - 1))) != 0
-    }
-
-    fn reason(&self) -> ScauseReason {
-        if self.is_interrupt() {
-            // unset the interrupt bit
-            match self.0 & 0x7FFFFFFFFFFFFFFF {
-                0 => ScauseReason::UserSoftwareInterrupt,
-                1 => ScauseReason::SupervisorSoftwareInterrupt,
-                4 => ScauseReason::UserTimerInterrupt,
-                5 => ScauseReason::SupervisorTimerInterrupt,
-                8 => ScauseReason::UserExternalInterrupt,
-                9 => ScauseReason::SupervisorExternalInterrupt,
-                2 | 3 | 6 | 7 | 10.. => ScauseReason::Reserved,
-            }
-        } else {
-            match self.0 {
-                0 => ScauseReason::InstructionAddressMisaligned,
-                1 => ScauseReason::InstructionAccessFault,
-                2 => ScauseReason::IllegalInstruction,
-                3 => ScauseReason::Breakpoint,
-                5 => ScauseReason::LoadAccessFault,
-                6 => ScauseReason::AmoAddressMisaligned,
-                7 => ScauseReason::StoreAmoAccessFault,
-                8 => ScauseReason::EnvironmentCall,
-                4 | 9.. => ScauseReason::Reserved,
-            }
-        }
-    }
-}
-
-impl core::fmt::Debug for Scause {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "{:?}", self.reason())
-    }
 }
 
 /// Naked wrapper around the `trap handler` to save all registers into the
@@ -287,12 +217,7 @@ pub extern "C" fn trap_handler() -> ! {
 
 #[unsafe(no_mangle)]
 extern "C" fn trap_handler_rust(frame: *mut TrapFrame) {
-    let scause: usize;
-    unsafe {
-        asm!("csrr {}, scause", out(reg) scause);
-    }
-
-    let scause = Scause(scause);
+    let scause = riscv::asm::scause();
 
     match scause.reason() {
         ScauseReason::SupervisorTimerInterrupt => {
@@ -327,11 +252,10 @@ fn setup_trap_frame(layout: KernelLayout) {
 /// Set the trap handler by writing the address of `trap_handler` to the
 /// `stvec` register with the lower 2 bits masked off.
 fn setup_trap_handler() {
-    let trap_handler_addr = (trap_handler as *const () as usize) & !0b11;
+    let trap_handler_addr = trap_handler as *const () as usize;
+    let stvec = Stvec::new(trap_handler_addr);
 
-    unsafe {
-        asm!("csrw stvec, {}", in(reg) trap_handler_addr);
-    };
+    riscv::asm::write_stvec(stvec);
 }
 
 /// Initializes the trap handler by writing the address of the `trap_handler` to the `stvec`

@@ -1,5 +1,7 @@
 use core::arch::asm;
 
+use crate::riscv;
+
 /// Helper function that creates a timer for 1 second using the frequency read
 /// from the device tree.
 /// NOTE: Since this is reading values from the device tree it has to be
@@ -7,8 +9,8 @@ use core::arch::asm;
 pub fn new_time(secs: usize) {
     // TODO(mt): create a mapping for functions in sbi module.
     const TIME_FN: usize = 0x54494D45;
-    let freq = crate::device_tree::timer_frequency();
 
+    let freq = crate::device_tree::timer_frequency();
     let time = freq * secs;
 
     unsafe {
@@ -26,18 +28,11 @@ pub fn new_time(secs: usize) {
     }
 }
 
-pub fn rdtime() -> usize {
-    let time: usize;
-    unsafe { asm!("rdtime {}", out(reg) time) }
-    time
-}
-
 pub fn uptime() -> usize {
-    let freq = crate::device_tree::timer_frequency();
-    rdtime() / freq
+    riscv::asm::rdtime() / crate::device_tree::timer_frequency()
 }
 
 pub fn uptime_ms() -> usize {
     let freq = crate::device_tree::timer_frequency() / 1000;
-    rdtime() / freq
+    riscv::asm::rdtime() / freq
 }

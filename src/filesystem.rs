@@ -169,7 +169,7 @@ impl LockedFilesystem {
         self.get().write_to_file(path, bytes)
     }
 
-    pub(crate) fn read_file(&mut self, path: &str) -> Result<String, Error> {
+    fn read_file(&mut self, path: &str) -> Result<String, Error> {
         self.get().read_file(path)
     }
 
