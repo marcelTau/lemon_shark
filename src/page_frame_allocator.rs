@@ -10,6 +10,7 @@ use crate::kernel_layout::KernelLayout;
 
 static PAGE_FRAME_ALLOCATOR: spin::Mutex<Option<PageFrameAllocator>> = spin::Mutex::new(None);
 
+/// Represents a range of physical memory that is managed by the `PageFrameAllocator`.
 struct FrameArena {
     range: PhysRange,
     used: Bitmap,

@@ -41,6 +41,7 @@ where
 {
     let sstatus: usize;
 
+    // Reads the `sstatus` register into a local variable and then clears the `0x2` bit.
     unsafe {
         asm!("csrr {}, sstatus", out(reg) sstatus);
         asm!("csrci sstatus, 0x2");
@@ -48,6 +49,7 @@ where
 
     let result = f();
 
+    // If the `0x2` bit was set before, set it again.
     if (sstatus & 0x2) != 0 {
         unsafe {
             asm!("csrsi sstatus, 0x2");
