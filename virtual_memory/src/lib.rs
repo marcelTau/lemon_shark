@@ -49,7 +49,7 @@ impl VirtAddr {
 
 /// A `PageTableEntry` always has the following format.
 ///
-/// ```
+/// ```text
 /// 63           54 53        28 27        19 18        10 9     8 7 6 5 4 3 2 1 0
 /// +---------------+------------+------------+------------+-----+-+-+-+-+-+-+-+-+
 /// |    Reserved   | PPN[2]     | PPN[1]     | PPN[0]     | RSW |D|A|G|U|X|W|R|V|
@@ -187,7 +187,9 @@ impl PageTable {
 
     /// Allocate and zero a new frame using the provided allocator, returning it as a PageTable.
     ///
-    /// SAFETY: `alloc` must return a valid, writable, 4KB-aligned physical address.
+    /// # Safety
+    ///
+    /// `alloc` must return a valid, writable, 4KB-aligned physical address.
     unsafe fn new_table<F>(alloc: &F) -> PhysAddr
     where
         F: Fn() -> PhysAddr,

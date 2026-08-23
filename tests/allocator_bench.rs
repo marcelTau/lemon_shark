@@ -9,7 +9,7 @@ mod common;
 use core::arch::global_asm;
 
 use lemon_shark::allocator::FreeListAllocator;
-use lemon_shark::{timer, trap_handler};
+use lemon_shark::{riscv, trap_handler};
 
 global_asm!(
     ".section .text.boot",
@@ -45,14 +45,14 @@ fn benchmark_1000_allocations() {
 
     let layout = core::alloc::Layout::from_size_align(1000, 8).unwrap();
 
-    let start = timer::rdtime();
+    let start = riscv::asm::rdtime();
 
     for _ in 0..1000 {
         let ptr = alloc.alloc(layout);
         alloc.dealloc(ptr, layout);
     }
 
-    let end = timer::rdtime();
+    let end = riscv::asm::rdtime();
     let elapsed = end - start;
 
     // Assuming 10 MHz timebase (adjust for your system)
@@ -74,14 +74,14 @@ fn benchmark_10000_allocations() {
 
     let layout = core::alloc::Layout::from_size_align(10000, 8).unwrap();
 
-    let start = timer::rdtime();
+    let start = riscv::asm::rdtime();
 
     for _ in 0..10000 {
         let ptr = alloc.alloc(layout);
         alloc.dealloc(ptr, layout);
     }
 
-    let end = timer::rdtime();
+    let end = riscv::asm::rdtime();
     let elapsed = end - start;
 
     // Assuming 10 MHz timebase (adjust for your system)
@@ -103,14 +103,14 @@ fn benchmark_100000_allocations() {
 
     let layout = core::alloc::Layout::from_size_align(100000, 8).unwrap();
 
-    let start = timer::rdtime();
+    let start = riscv::asm::rdtime();
 
     for _ in 0..100000 {
         let ptr = alloc.alloc(layout);
         alloc.dealloc(ptr, layout);
     }
 
-    let end = timer::rdtime();
+    let end = riscv::asm::rdtime();
     let elapsed = end - start;
 
     // Assuming 10 MHz timebase (adjust for your system)
