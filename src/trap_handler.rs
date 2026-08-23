@@ -93,11 +93,6 @@ impl TrapFrame {
 /// `kernel_sp` is filled in by `init()`.
 static mut INITIAL_TRAP_FRAME: TrapFrame = TrapFrame::zero();
 
-/// TODO(mt): clean that up
-pub(crate) fn kernel_sp() -> usize {
-    unsafe { INITIAL_TRAP_FRAME.kernel_sp }
-}
-
 /// Naked wrapper around the `trap handler` to save all registers into the
 /// current process's `TrapFrame` and switch to the kernel trap stack.
 ///
