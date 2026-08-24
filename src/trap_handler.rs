@@ -47,6 +47,7 @@ pub struct TrapFrame {
     pub t5: usize,        // offset 240
     pub t6: usize,        // offset 248
     pub sepc: usize,      // offset 256
+    pub sstatus: usize,   // offset 264
 }
 
 impl TrapFrame {
@@ -85,6 +86,7 @@ impl TrapFrame {
             t5: 0,
             t6: 0,
             sepc: 0,
+            sstatus: 0,
         }
     }
 }
@@ -97,9 +99,9 @@ static mut INITIAL_TRAP_FRAME: TrapFrame = TrapFrame::zero();
 /// current process's `TrapFrame` and switch to the kernel trap stack.
 ///
 /// `sscratch` points to the current process's `TrapFrame`. We swap it with
-/// `a0` to get the frame pointer, save all 31 GP registers + `sepc` into it,
-/// then load `kernel_sp` from the frame (offset 0) to switch stacks before
-/// calling the Rust handler.
+/// `a0` to get the frame pointer, save all 31 GP registers plus `sepc` and
+/// `sstatus` into it, then load `kernel_sp` from the frame (offset 0) to switch
+/// stacks before calling the Rust handler.
 ///
 /// On exit, `sscratch` is read again — the scheduler may have updated it to
 /// a different process's frame during a context switch — and all registers
@@ -148,6 +150,11 @@ pub extern "C" fn trap_handler() -> ! {
         "csrr t0, sepc",
         "sd t0,   256(a0)",
 
+        // Save the trap-time privilege and interrupt state. In particular,
+        // sret uses SPP to select the return privilege and SPIE to restore SIE.
+        "csrr t0, sstatus",
+        "sd t0,   264(a0)",
+
         // recover original a0 (stashed in sscratch) and save it
         "csrr t0, sscratch",
         "sd t0,   80(a0)",
@@ -164,9 +171,12 @@ pub extern "C" fn trap_handler() -> ! {
         // reload TrapFrame pointer
         "csrr a0, sscratch",
 
-        // restore sepc before t0 is overwritten
+        // Restore the selected context's control state before t0 is overwritten.
+        // The scheduler may have changed sscratch to point at another frame.
         "ld t0,   256(a0)",
         "csrw sepc, t0",
+        "ld t0,   264(a0)",
+        "csrw sstatus, t0",
 
         // restore all GP registers except sp and a0
         "ld ra,   8(a0)",
