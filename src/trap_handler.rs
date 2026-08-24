@@ -50,6 +50,49 @@ pub struct TrapFrame {
     pub sstatus: usize,   // offset 264
 }
 
+// Keep the Rust structure layout synchronized with the hardcoded offsets in
+// `trap_handler`. A mismatch here would make the assembly silently save or
+// restore a register through the wrong field.
+const _: () = {
+    assert!(core::mem::align_of::<TrapFrame>() == 8);
+    assert!(core::mem::size_of::<TrapFrame>() == 272);
+
+    assert!(core::mem::offset_of!(TrapFrame, kernel_sp) == 0);
+    assert!(core::mem::offset_of!(TrapFrame, ra) == 8);
+    assert!(core::mem::offset_of!(TrapFrame, sp) == 16);
+    assert!(core::mem::offset_of!(TrapFrame, gp) == 24);
+    assert!(core::mem::offset_of!(TrapFrame, tp) == 32);
+    assert!(core::mem::offset_of!(TrapFrame, t0) == 40);
+    assert!(core::mem::offset_of!(TrapFrame, t1) == 48);
+    assert!(core::mem::offset_of!(TrapFrame, t2) == 56);
+    assert!(core::mem::offset_of!(TrapFrame, s0) == 64);
+    assert!(core::mem::offset_of!(TrapFrame, s1) == 72);
+    assert!(core::mem::offset_of!(TrapFrame, a0) == 80);
+    assert!(core::mem::offset_of!(TrapFrame, a1) == 88);
+    assert!(core::mem::offset_of!(TrapFrame, a2) == 96);
+    assert!(core::mem::offset_of!(TrapFrame, a3) == 104);
+    assert!(core::mem::offset_of!(TrapFrame, a4) == 112);
+    assert!(core::mem::offset_of!(TrapFrame, a5) == 120);
+    assert!(core::mem::offset_of!(TrapFrame, a6) == 128);
+    assert!(core::mem::offset_of!(TrapFrame, a7) == 136);
+    assert!(core::mem::offset_of!(TrapFrame, s2) == 144);
+    assert!(core::mem::offset_of!(TrapFrame, s3) == 152);
+    assert!(core::mem::offset_of!(TrapFrame, s4) == 160);
+    assert!(core::mem::offset_of!(TrapFrame, s5) == 168);
+    assert!(core::mem::offset_of!(TrapFrame, s6) == 176);
+    assert!(core::mem::offset_of!(TrapFrame, s7) == 184);
+    assert!(core::mem::offset_of!(TrapFrame, s8) == 192);
+    assert!(core::mem::offset_of!(TrapFrame, s9) == 200);
+    assert!(core::mem::offset_of!(TrapFrame, s10) == 208);
+    assert!(core::mem::offset_of!(TrapFrame, s11) == 216);
+    assert!(core::mem::offset_of!(TrapFrame, t3) == 224);
+    assert!(core::mem::offset_of!(TrapFrame, t4) == 232);
+    assert!(core::mem::offset_of!(TrapFrame, t5) == 240);
+    assert!(core::mem::offset_of!(TrapFrame, t6) == 248);
+    assert!(core::mem::offset_of!(TrapFrame, sepc) == 256);
+    assert!(core::mem::offset_of!(TrapFrame, sstatus) == 264);
+};
+
 impl TrapFrame {
     pub const fn zero() -> Self {
         Self {
