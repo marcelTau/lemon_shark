@@ -42,12 +42,8 @@ extern "C" fn _start(_: usize, device_table_addr: usize) -> ! {
     trap_handler::init(kernel_layout);
     device_tree::init(device_table_addr).expect("failed to initialize device tree");
 
-    interrupts::init();
-
     page_frame_allocator::init(kernel_layout);
     page_table::init(kernel_layout);
-
-    crate::timer::new_time(1);
 
     let virtio_device = virtio2::make_device();
     filesystem::init_with_device(KernelBlockDevice::VirtIO(virtio_device));
@@ -59,6 +55,11 @@ extern "C" fn _start(_: usize, device_table_addr: usize) -> ! {
         "========== Boot completed {}ms ==========",
         timer::uptime_ms()
     );
+
+    // Program the first deadline before making timer interrupts observable.
+    // Global interrupts are enabled only after boot initialization is complete.
+    timer::new_time(1);
+    interrupts::init();
 
     shell::shell()
 }

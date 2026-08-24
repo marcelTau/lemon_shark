@@ -154,6 +154,7 @@ pub mod asm {
     use super::{Satp, Scause, Stvec};
 
     /// Reads the current scause value from the CSR.
+    #[inline(always)]
     pub fn scause() -> Scause {
         let value: usize;
 
@@ -165,6 +166,7 @@ pub mod asm {
     }
 
     /// Writes the `satp` register with the given value, followed by a `sfence.vma` to flush the TLB.
+    #[inline(always)]
     pub fn write_satp_and_flush_tlb(satp: Satp) {
         unsafe {
             core::arch::asm!(
@@ -175,12 +177,14 @@ pub mod asm {
         }
     }
 
+    #[inline(always)]
     pub fn write_stvec(val: Stvec) {
         unsafe {
             core::arch::asm!("csrw stvec, {}", in(reg) val.0);
         }
     }
 
+    #[inline(always)]
     pub fn rdtime() -> usize {
         let time: usize;
         unsafe { core::arch::asm!("rdtime {}", out(reg) time) }
@@ -189,48 +193,66 @@ pub mod asm {
 
     /// https://www.scs.stanford.edu/~zyedidia/docs/riscv/riscv-privileged.pdf Section 4.1.3
     pub mod sie {
+        #[inline(always)]
         pub fn enable_timer_interrupt() {
             unsafe { core::arch::asm!("csrs sie, {}", in(reg) 1 << 5) };
         }
 
+        #[inline(always)]
         pub fn enable_external_interrupt() {
             unsafe { core::arch::asm!("csrs sie, {}", in(reg) 1 << 9) };
         }
 
-        /// The reference suggest checking which interrupts are implemented by writing `1` to all available
-        /// bits in the `SIE` register and seeing which ones stick
+        /// Checks whether the supervisor software, timer, and external interrupt
+        /// enable bits are implemented without changing the interrupt state seen
+        /// by the caller.
+        ///
+        /// Global supervisor interrupts are disabled while probing so a pending
+        /// interrupt cannot be delivered while the temporary `sie` bits are set.
+        /// Both `sie` and `sstatus` are restored before this function returns.
         ///
         /// # Reference
         ///
         /// https://www.scs.stanford.edu/~zyedidia/docs/riscv/riscv-privileged.pdf Section 4.1.3
         pub fn probe() {
+            const SSTATUS_SIE: usize = 1 << 1;
+            const SSIE: usize = 1 << 1;
+            const STIE: usize = 1 << 5;
+            const SEIE: usize = 1 << 9;
+            const PROBED_INTERRUPTS: usize = SSIE | STIE | SEIE;
+
+            let _previous_sstatus: usize;
+            let _previous_sie: usize;
+            let implemented: usize;
+
             unsafe {
-                core::arch::asm!("csrs sie, {}", in(reg) 1 << 1);
-                core::arch::asm!("csrs sie, {}", in(reg) 1 << 5);
-                core::arch::asm!("csrs sie, {}", in(reg) 1 << 9);
+                core::arch::asm!(
+                    "csrrc {previous_sstatus}, sstatus, {sstatus_sie}",
+                    "csrrs {previous_sie}, sie, {probed_interrupts}",
+                    "csrr {implemented}, sie",
+                    "csrw sie, {previous_sie}",
+                    "csrw sstatus, {previous_sstatus}",
+                    previous_sstatus = out(reg) _previous_sstatus,
+                    previous_sie = out(reg) _previous_sie,
+                    implemented = out(reg) implemented,
+                    sstatus_sie = in(reg) SSTATUS_SIE,
+                    probed_interrupts = in(reg) PROBED_INTERRUPTS,
+                    options(nomem, nostack),
+                );
+            }
 
-                let sie: usize;
-                core::arch::asm!("csrr {}, sie", out(reg) sie);
+            let missing = PROBED_INTERRUPTS & !implemented;
 
-                let implemented_interrupts = sie.count_ones();
+            if missing & SSIE != 0 {
+                log::error!("Unimplemented Interrupt: SSIE (Supervisor Software Interrupt)");
+            }
 
-                if implemented_interrupts != 3 {
-                    if sie & (1 << 1) == 0 {
-                        log::error!(
-                            "Unimplemented Interrupt: SSIE (Supervisor Software Interrupt)"
-                        );
-                    }
+            if missing & STIE != 0 {
+                log::error!("Unimplemented Interrupt: STIE (Supervisor Timer Interrupts)");
+            }
 
-                    if sie & (1 << 5) == 0 {
-                        log::error!("Unimplemented Interrupt: STIE (Supervisor Timer Interrupts)");
-                    }
-
-                    if sie & (1 << 9) == 0 {
-                        log::error!(
-                            "Unimplemented Interrupt: SEIE (Supervisor External Interrupts)"
-                        );
-                    }
-                }
+            if missing & SEIE != 0 {
+                log::error!("Unimplemented Interrupt: SEIE (Supervisor External Interrupts)");
             }
         }
     }

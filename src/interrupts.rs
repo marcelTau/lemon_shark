@@ -11,6 +11,8 @@ pub fn init() {
     // Enables the `SIE` bit in `sstatus`
     // TODO(mt): encapsulate this
     unsafe { asm!("csrs sstatus, {}", in(reg) 1 << 1) };
+
+    log::info!("Initialized");
 }
 
 /// Runs `f` with supervisor interrupts disabled on the current CPU, then
