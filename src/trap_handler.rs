@@ -267,26 +267,49 @@ pub extern "C" fn trap_handler() -> ! {
 #[unsafe(no_mangle)]
 extern "C" fn trap_handler_rust(frame: *mut TrapFrame) {
     let scause = riscv::asm::scause();
+    let stval = riscv::asm::stval();
+    let frame = unsafe { &mut *frame };
 
     match scause.reason() {
         ScauseReason::SupervisorTimerInterrupt => {
             crate::timer::new_time(1);
         }
-        ScauseReason::Breakpoint => unsafe {
-            let sepc = (*frame).sepc;
+        ScauseReason::Breakpoint => {
+            let sepc = frame.sepc;
             // Determine ebreak size and skip it
             let ebreak_size = {
-                let first_halfword = (sepc as *const u16).read();
+                let first_halfword = unsafe { (sepc as *const u16).read() };
                 // branchless magic - compressed instructions (2 bytes) have lower 2 bits != 0b11.
                 2 << ((first_halfword & 0b11 == 0b11) as usize)
             };
-            (*frame).sepc = sepc + ebreak_size;
-        },
-        ScauseReason::IllegalInstruction => {
-            panic!("Kernel used an illegal instruction");
+            frame.sepc = sepc + ebreak_size;
         }
-        _ => {}
+        _ => fatal_unhandled_trap(&scause, frame, stval),
     }
+}
+
+/// Report an unhandled trap without returning to the faulting instruction.
+///
+/// At present every runnable context belongs to the kernel, so an unhandled
+/// trap is fatal. Once U-mode tasks exist, traps whose saved `SPP` bit is clear
+/// should terminate only the current task instead of halting the whole system.
+fn fatal_unhandled_trap(scause: &Scause, frame: &TrapFrame, stval: usize) -> ! {
+    const SSTATUS_SPP: usize = 1 << 8;
+
+    let origin = if frame.sstatus & SSTATUS_SPP != 0 {
+        "supervisor"
+    } else {
+        "user"
+    };
+
+    // Use the direct UART console rather than the kernel logger here. A fault
+    // may have interrupted code while it held the VirtIO logging lock.
+    crate::println!("\n[FATAL] Unhandled trap from {origin} mode");
+    crate::println!("  scause = {:#018x} ({:?})", scause.raw(), scause.reason());
+    crate::println!("  sepc   = {:#018x}", frame.sepc);
+    crate::println!("  stval  = {stval:#018x}");
+
+    riscv::asm::halt()
 }
 
 /// Sets up the initial `TrapFrame` for the kernel context and points

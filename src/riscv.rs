@@ -64,7 +64,7 @@ impl Satp {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ScauseReason {
     // interrupts
     UserSoftwareInterrupt,
@@ -79,10 +79,15 @@ pub enum ScauseReason {
     InstructionAccessFault,
     IllegalInstruction,
     Breakpoint,
+    LoadAddressMisaligned,
     LoadAccessFault,
-    AmoAddressMisaligned,
+    StoreAmoAddressMisaligned,
     StoreAmoAccessFault,
-    EnvironmentCall,
+    EnvironmentCallFromUserMode,
+    EnvironmentCallFromSupervisorMode,
+    InstructionPageFault,
+    LoadPageFault,
+    StoreAmoPageFault,
 
     // TODO(mt): when looking into semihosting again, 0x3f is the code for a
     // semihost operation in qemu: https://github.com/qemu/qemu/blob/master/target/riscv/cpu_bits.h#L785
@@ -90,7 +95,7 @@ pub enum ScauseReason {
     // Don't know if this is useful as with the latest try, we could not manage
     // to make qemu read the ebreak call as openSBI only reads things in
     // m-mode and we capture the breakpoint exception in s-mode.
-    Reserved,
+    Reserved(usize),
 }
 
 /// https://people.eecs.berkeley.edu/~krste/papers/riscv-privileged-v1.9.1.pdf
@@ -99,33 +104,45 @@ pub enum ScauseReason {
 pub struct Scause(usize);
 
 impl Scause {
-    pub fn is_interrupt(&self) -> bool {
+    pub const fn raw(&self) -> usize {
+        self.0
+    }
+
+    pub const fn is_interrupt(&self) -> bool {
         (self.0 & (1 << (usize::BITS - 1))) != 0
+    }
+
+    pub const fn code(&self) -> usize {
+        self.0 & (usize::MAX >> 1)
     }
 
     pub fn reason(&self) -> ScauseReason {
         if self.is_interrupt() {
-            // unset the interrupt bit
-            match self.0 & 0x7FFFFFFFFFFFFFFF {
+            match self.code() {
                 0 => ScauseReason::UserSoftwareInterrupt,
                 1 => ScauseReason::SupervisorSoftwareInterrupt,
                 4 => ScauseReason::UserTimerInterrupt,
                 5 => ScauseReason::SupervisorTimerInterrupt,
                 8 => ScauseReason::UserExternalInterrupt,
                 9 => ScauseReason::SupervisorExternalInterrupt,
-                2 | 3 | 6 | 7 | 10.. => ScauseReason::Reserved,
+                code => ScauseReason::Reserved(code),
             }
         } else {
-            match self.0 {
+            match self.code() {
                 0 => ScauseReason::InstructionAddressMisaligned,
                 1 => ScauseReason::InstructionAccessFault,
                 2 => ScauseReason::IllegalInstruction,
                 3 => ScauseReason::Breakpoint,
+                4 => ScauseReason::LoadAddressMisaligned,
                 5 => ScauseReason::LoadAccessFault,
-                6 => ScauseReason::AmoAddressMisaligned,
+                6 => ScauseReason::StoreAmoAddressMisaligned,
                 7 => ScauseReason::StoreAmoAccessFault,
-                8 => ScauseReason::EnvironmentCall,
-                4 | 9.. => ScauseReason::Reserved,
+                8 => ScauseReason::EnvironmentCallFromUserMode,
+                9 => ScauseReason::EnvironmentCallFromSupervisorMode,
+                12 => ScauseReason::InstructionPageFault,
+                13 => ScauseReason::LoadPageFault,
+                15 => ScauseReason::StoreAmoPageFault,
+                code => ScauseReason::Reserved(code),
             }
         }
     }
@@ -163,6 +180,35 @@ pub mod asm {
         }
 
         Scause(value)
+    }
+
+    /// Reads supervisor trap value (`stval`).
+    ///
+    /// Its meaning depends on the trap cause. For address and page faults it
+    /// normally contains the virtual address involved in the fault; for traps
+    /// without additional information it is zero.
+    #[inline(always)]
+    pub fn stval() -> usize {
+        let value: usize;
+
+        unsafe {
+            core::arch::asm!("csrr {}, stval", out(reg) value, options(nomem, nostack));
+        }
+
+        value
+    }
+
+    /// Disable supervisor interrupts and put this hart into an idle loop.
+    pub fn halt() -> ! {
+        unsafe {
+            core::arch::asm!("csrci sstatus, 0x2", options(nomem, nostack));
+        }
+
+        loop {
+            unsafe {
+                core::arch::asm!("wfi", options(nomem, nostack));
+            }
+        }
     }
 
     /// Writes the `satp` register with the given value, followed by a `sfence.vma` to flush the TLB.
