@@ -204,7 +204,8 @@ pub extern "C" fn trap_handler() -> ! {
         // restore a0 - TrapFrame unreachable after this
         "ld a0,   80(a0)",
 
-        "sret",
+        "sret", // TODO(mt): `sret` also does some modifications on `sstatus` to enable interrupts
+                // again.
 
         trap_handler_rust = sym trap_handler_rust,
     );
@@ -228,6 +229,9 @@ extern "C" fn trap_handler_rust(frame: *mut TrapFrame) {
             };
             (*frame).sepc = sepc + ebreak_size;
         },
+        ScauseReason::IllegalInstruction => {
+            panic!("Kernel used an illegal instruction");
+        }
         _ => {}
     }
 }

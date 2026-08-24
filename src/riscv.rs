@@ -27,6 +27,13 @@ impl From<Asid> for usize {
     }
 }
 
+// TODO(mt): also read about other CSR's (here)[https://people.eecs.berkeley.edu/~krste/papers/riscv-privileged-v1.9.1.pdf] Section 2.2
+
+/// Supervisor Interrupt Enabled
+pub struct Sie(usize);
+
+impl Sie {}
+
 pub enum SatpMode {
     Bare = 0,
     Sv39 = 8,
@@ -178,5 +185,53 @@ pub mod asm {
         let time: usize;
         unsafe { core::arch::asm!("rdtime {}", out(reg) time) }
         time
+    }
+
+    /// https://www.scs.stanford.edu/~zyedidia/docs/riscv/riscv-privileged.pdf Section 4.1.3
+    pub mod sie {
+        pub fn enable_timer_interrupt() {
+            unsafe { core::arch::asm!("csrs sie, {}", in(reg) 1 << 5) };
+        }
+
+        pub fn enable_external_interrupt() {
+            unsafe { core::arch::asm!("csrs sie, {}", in(reg) 1 << 9) };
+        }
+
+        /// The reference suggest checking which interrupts are implemented by writing `1` to all available
+        /// bits in the `SIE` register and seeing which ones stick
+        ///
+        /// # Reference
+        ///
+        /// https://www.scs.stanford.edu/~zyedidia/docs/riscv/riscv-privileged.pdf Section 4.1.3
+        pub fn probe() {
+            unsafe {
+                core::arch::asm!("csrs sie, {}", in(reg) 1 << 1);
+                core::arch::asm!("csrs sie, {}", in(reg) 1 << 5);
+                core::arch::asm!("csrs sie, {}", in(reg) 1 << 9);
+
+                let sie: usize;
+                core::arch::asm!("csrr {}, sie", out(reg) sie);
+
+                let implemented_interrupts = sie.count_ones();
+
+                if implemented_interrupts != 3 {
+                    if sie & (1 << 1) == 0 {
+                        log::error!(
+                            "Unimplemented Interrupt: SSIE (Supervisor Software Interrupt)"
+                        );
+                    }
+
+                    if sie & (1 << 5) == 0 {
+                        log::error!("Unimplemented Interrupt: STIE (Supervisor Timer Interrupts)");
+                    }
+
+                    if sie & (1 << 9) == 0 {
+                        log::error!(
+                            "Unimplemented Interrupt: SEIE (Supervisor External Interrupts)"
+                        );
+                    }
+                }
+            }
+        }
     }
 }

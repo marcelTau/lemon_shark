@@ -2,10 +2,11 @@ use core::arch::asm;
 
 use crate::riscv;
 
-/// Helper function that creates a timer for 1 second using the frequency read
-/// from the device tree.
-/// NOTE: Since this is reading values from the device tree it has to be
-/// initialized, even in tests ...
+/// Helper function that creates a timer for `secs` second using the frequency read from the device
+/// tree.
+///
+/// NOTE: Since this is reading values from the device tree it has to be initialized, even in
+/// tests.
 pub fn new_time(secs: usize) {
     // TODO(mt): create a mapping for functions in sbi module.
     const TIME_FN: usize = 0x54494D45;

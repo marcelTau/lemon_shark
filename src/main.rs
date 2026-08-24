@@ -3,11 +3,12 @@
 
 use core::arch::global_asm;
 use lemon_shark::{
-    ALLOCATOR, device_tree,
+    device_tree,
     filesystem::{self, KernelBlockDevice},
     interrupts,
     kernel_layout::KernelLayout,
-    logo, page_frame_allocator, page_table, println, shell, timer, trap_handler, virtio2,
+    logo, page_frame_allocator, page_table, println, riscv, shell, timer, trap_handler, virtio2,
+    ALLOCATOR,
 };
 
 // This is the section that we mapped first in the linker script `linker.ld`
@@ -34,6 +35,8 @@ extern "C" fn _start(_: usize, device_table_addr: usize) -> ! {
     lemon_shark::klog::init();
     log::warn!("========== Kernel started ==========");
     log::info!("{kernel_layout:#x?}");
+
+    riscv::asm::sie::probe();
 
     virtio2::init_console();
     trap_handler::init(kernel_layout);

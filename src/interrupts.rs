@@ -1,15 +1,16 @@
 use core::arch::asm;
 
+use crate::riscv;
+
 /// Enables interrupts globally and enables the timer interrupt
 /// https://people.eecs.berkeley.edu/~krste/papers/riscv-privileged-v1.9.1.pdf
 /// Section 4.1.4
 pub fn init() {
-    unsafe {
-        asm!("csrs sie, {}", in(reg) 1 << 5); // STIE
-        asm!("csrs sstatus, {}", in(reg) 1 << 1); // SIE
-    }
+    riscv::asm::sie::enable_timer_interrupt();
 
-    log::info!("Timer interrupt enabled");
+    // Enables the `SIE` bit in `sstatus`
+    // TODO(mt): encapsulate this
+    unsafe { asm!("csrs sstatus, {}", in(reg) 1 << 1) };
 }
 
 /// Runs `f` with supervisor interrupts disabled on the current CPU, then
