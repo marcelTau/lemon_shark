@@ -279,7 +279,9 @@ extern "C" fn trap_handler_rust(frame: *mut TrapFrame) {
             // Determine ebreak size and skip it
             let ebreak_size = {
                 let first_halfword = unsafe { (sepc as *const u16).read() };
-                // branchless magic - compressed instructions (2 bytes) have lower 2 bits != 0b11.
+                // RISC-V instructions longer than 16 bits have their lowest two bits set
+                // to 0b11; 16-bit compressed instructions do not. Breakpoints therefore
+                // use 2 << 0 = 2 bytes for `c.ebreak`, or 2 << 1 = 4 bytes for `ebreak`.
                 2 << ((first_halfword & 0b11 == 0b11) as usize)
             };
             frame.sepc = sepc + ebreak_size;
