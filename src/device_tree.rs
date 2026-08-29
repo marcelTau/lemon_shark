@@ -17,7 +17,7 @@ struct SystemInfo {
     mmio_regions: Vec<PhysRange>,
     fdt_range: PhysRange,
     total_memory: usize,
-    block_device_addr: usize,
+    block_device_addr: Option<usize>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -35,7 +35,6 @@ pub enum DeviceTreeError {
     MissingCpu,
     MissingCpuIsa,
     InvalidCpuIsa,
-    MissingBlockDevice,
     AlreadyInitialized,
 }
 
@@ -214,7 +213,7 @@ impl SystemInfo {
             mmio_regions,
             fdt_range,
             total_memory,
-            block_device_addr: block_device_addr.ok_or(DeviceTreeError::MissingBlockDevice)?,
+            block_device_addr,
         };
 
         log::info!("memory regions: {:?}", system_info.memory_regions);
@@ -253,7 +252,7 @@ pub fn timer_frequency() -> usize {
     system_info().timer_frequency
 }
 
-pub fn cpus() -> usize {
+pub(crate) fn cpus() -> usize {
     system_info().cpus
 }
 
@@ -273,16 +272,18 @@ pub(crate) fn fdt_range() -> PhysRange {
     system_info().fdt_range
 }
 
-pub fn total_memory() -> usize {
+pub(crate) fn total_memory() -> usize {
     system_info().total_memory
 }
 
-pub fn cpu_isa() -> String {
+pub(crate) fn cpu_isa() -> String {
     system_info().cpu_isa.clone()
 }
 
-pub fn block_device_addr() -> usize {
-    system_info().block_device_addr
+pub(crate) fn block_device_addr() -> usize {
+    system_info()
+        .block_device_addr
+        .expect("no enabled VirtIO block device was found in the device tree")
 }
 
 /// Return the page-aligned MMIO windows used by the kernel from an early-boot FDT.
