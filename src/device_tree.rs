@@ -248,6 +248,7 @@ fn system_info() -> &'static SystemInfo {
         .expect("device tree accessed before device_tree::init()")
 }
 
+/// The timer frequency is describing the number of ticks that the hardware-timer advances per second.
 pub fn timer_frequency() -> usize {
     system_info().timer_frequency
 }

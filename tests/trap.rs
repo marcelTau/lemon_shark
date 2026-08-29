@@ -9,6 +9,7 @@ mod common;
 use core::arch::{asm, global_asm};
 
 use lemon_shark::trap_handler::{self, TrapFrame};
+use lemon_shark::{ALLOCATOR, device_tree, riscv, timer};
 
 global_asm!(
     ".section .text.boot",
@@ -346,9 +347,12 @@ unsafe extern "C" {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn _start(_: usize, _: usize) -> ! {
+pub extern "C" fn _start(_: usize, fdt_addr: usize) -> ! {
     let layout = common::init_kernel_layout();
     trap_handler::init(layout);
+    unsafe { ALLOCATOR.init(layout) };
+    device_tree::init(fdt_addr).expect("failed to initialize device tree for trap tests");
+    timer::init(device_tree::timer_frequency());
 
     test_main();
     riscv_halt()
@@ -492,4 +496,101 @@ fn compressed_breakpoint_round_trip_preserves_context() {
 fn repeated_breakpoints_leave_trap_state_reusable() {
     run_probe(trap_probe_ebreak, false);
     run_probe(trap_probe_compressed_ebreak, true);
+}
+
+#[test_case]
+fn recurring_timer_interrupts_return_and_preserve_interrupt_state() {
+    const STIE: usize = 1 << 5;
+    const REQUIRED_INTERRUPTS: usize = 3;
+
+    let original_sstatus: usize;
+    let original_sie: usize;
+    unsafe {
+        asm!(
+            "csrr {sstatus}, sstatus",
+            "csrr {sie}, sie",
+            "csrci sstatus, 0x2",
+            sstatus = out(reg) original_sstatus,
+            sie = out(reg) original_sie,
+            options(nostack),
+        );
+    }
+
+    let frame_before = current_trap_frame_ptr();
+    let initial_count = timer::interrupt_count();
+    let timeout_ticks = device_tree::timer_frequency();
+
+    unsafe {
+        asm!("csrs sie, {stie}", stie = in(reg) STIE, options(nostack));
+    }
+
+    // The first deadline is immediately due. Interrupts two and three must
+    // come from the one-second deadline programmed by the handler itself.
+    timer::new_time(0);
+
+    for interrupt_index in 1..=REQUIRED_INTERRUPTS {
+        let expected_count = initial_count + interrupt_index;
+
+        unsafe {
+            asm!("csrsi sstatus, 0x2", options(nostack));
+        }
+
+        let timeout = riscv::asm::rdtime().saturating_add(timeout_ticks.saturating_mul(2));
+        while timer::interrupt_count() < expected_count && riscv::asm::rdtime() < timeout {
+            core::hint::spin_loop();
+        }
+
+        let returned_sstatus: usize;
+        unsafe {
+            asm!(
+                "csrr {returned_sstatus}, sstatus",
+                "csrci sstatus, 0x2",
+                returned_sstatus = out(reg) returned_sstatus,
+                options(nostack),
+            );
+        }
+
+        assert_eq!(
+            timer::interrupt_count(),
+            expected_count,
+            "timer interrupt {interrupt_index} was not delivered before the test timeout"
+        );
+        assert_ne!(
+            returned_sstatus & SSTATUS_SIE,
+            0,
+            "sret did not restore global supervisor interrupts"
+        );
+
+        let frame_after = current_trap_frame_ptr();
+        assert_eq!(frame_after, frame_before, "timer trap changed sscratch");
+
+        let frame = unsafe { frame_after.read_volatile() };
+        assert_eq!(
+            frame.sstatus & SSTATUS_SIE,
+            0,
+            "hardware must clear SIE on timer-trap entry"
+        );
+        assert_ne!(
+            frame.sstatus & SSTATUS_SPIE,
+            0,
+            "timer trap did not preserve the pre-trap SIE state in SPIE"
+        );
+        assert_ne!(
+            frame.sstatus & SSTATUS_SPP,
+            0,
+            "timer interrupt should have trapped from supervisor mode"
+        );
+    }
+
+    // The handler leaves a one-second deadline armed. Restoring the original
+    // `sie` value prevents it from interfering with later trap probes.
+    unsafe {
+        asm!(
+            "csrw sie, {sie}",
+            "csrw sstatus, {sstatus}",
+            sie = in(reg) original_sie,
+            sstatus = in(reg) original_sstatus,
+            options(nostack),
+        );
+    }
 }

@@ -272,7 +272,7 @@ extern "C" fn trap_handler_rust(frame: *mut TrapFrame) {
 
     match scause.reason() {
         ScauseReason::SupervisorTimerInterrupt => {
-            crate::timer::new_time(1);
+            timer::handle_interrupt();
         }
         ScauseReason::Breakpoint => {
             let sepc = frame.sepc;

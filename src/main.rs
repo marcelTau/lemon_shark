@@ -25,7 +25,6 @@ global_asm!(
     "   call _start",
 );
 
-// #[cfg(not(test))]
 #[unsafe(no_mangle)]
 extern "C" fn _start(_: usize, device_table_addr: usize) -> ! {
     let kernel_layout = unsafe { KernelLayout::from_labels() };
@@ -41,6 +40,7 @@ extern "C" fn _start(_: usize, device_table_addr: usize) -> ! {
     virtio2::init_console();
     trap_handler::init(kernel_layout);
     device_tree::init(device_table_addr).expect("failed to initialize device tree");
+    timer::init(device_tree::timer_frequency());
 
     page_frame_allocator::init(kernel_layout);
     page_table::init(kernel_layout);

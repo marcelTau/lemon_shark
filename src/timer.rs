@@ -1,15 +1,40 @@
-use crate::{device_tree, riscv};
+use spin::Once;
 
-/// Helper function that creates a timer for `secs` second using the frequency read from the device
-/// tree.
+use crate::riscv;
+use core::sync::atomic::{AtomicUsize, Ordering};
+
+/// Stores the hardware timebase frequency locally so timer operations do not
+/// depend on the device-tree subsystem after initialization.
 ///
-/// NOTE: Since this is reading values from the device tree it has to be initialized, even in
-/// tests.
+/// After initialization, `spin::Once::get` performs an atomic state load; it
+/// does not acquire a spin lock.
+static TIMER_FREQUENCY: Once<usize> = Once::new();
+
+pub fn init(freq: usize) {
+    assert_ne!(freq, 0, "Timer frequency must be non-zero");
+
+    TIMER_FREQUENCY.call_once(|| freq);
+}
+
+fn freq() -> usize {
+    *TIMER_FREQUENCY
+        .get()
+        .expect("Hardware Timer accessed before `timer::init()`")
+}
+
+/// Number of supervisor timer interrupts handled since boot.
+///
+/// `Relaxed` ordering is sufficient because this counter does not publish any
+/// other memory. It is an observation point for diagnostics and tests, not a
+/// synchronization primitive.
+static INTERRUPT_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+/// Program a timer deadline `secs` seconds from the current hardware time.
+///
+/// [`init`] must be called before this function.
 pub fn new_time(secs: usize) {
     const TIME_FN: usize = 0x54494D45;
-
-    let freq = device_tree::timer_frequency();
-    let time = freq * secs;
+    let time = freq() * secs;
 
     let error: usize;
 
@@ -33,11 +58,24 @@ pub fn new_time(secs: usize) {
     debug_assert_eq!(error, 0);
 }
 
+/// Handle one supervisor timer interrupt and program the next deadline.
+///
+/// Keeping both operations here gives tests one observable event while the
+/// trap handler remains responsible only for dispatching the trap cause.
+pub(crate) fn handle_interrupt() {
+    INTERRUPT_COUNT.fetch_add(1, Ordering::Relaxed);
+    new_time(1);
+}
+
+pub fn interrupt_count() -> usize {
+    INTERRUPT_COUNT.load(Ordering::Relaxed)
+}
+
 pub fn uptime() -> usize {
-    riscv::asm::rdtime() / device_tree::timer_frequency()
+    riscv::asm::rdtime() / freq()
 }
 
 pub fn uptime_ms() -> usize {
-    let freq = device_tree::timer_frequency() / 1000;
+    let freq = freq() / 1000;
     riscv::asm::rdtime() / freq
 }
