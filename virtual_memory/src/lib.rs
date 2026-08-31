@@ -174,6 +174,12 @@ pub struct PageTable {
     entries: [PageTableEntry; 512],
 }
 
+impl Default for PageTable {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PageTable {
     pub const fn new() -> PageTable {
         Self {

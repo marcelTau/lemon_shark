@@ -1083,8 +1083,8 @@ fn read_bitmap<Dev: BlockDevice>(
     for offset in 0..blocks_needed {
         block_device.read_block(BlockIndex::from_raw((start + offset) as u32), &mut buf);
         let remaining_words = word_count - words.len();
-        for bytes in buf.chunks_exact(4).take(remaining_words) {
-            words.push(u32::from_le_bytes(bytes.try_into().unwrap()));
+        for &word in buf.as_chunks::<4>().0.iter().take(remaining_words) {
+            words.push(u32::from_le_bytes(word));
         }
     }
 
@@ -1102,12 +1102,14 @@ fn write_bitmap<Dev: BlockDevice>(
     let mut words = bitmap.as_words().iter();
     for offset in 0..blocks {
         let mut buf = [0u8; BLOCK_SIZE];
-        for slot in buf.chunks_exact_mut(4) {
+
+        for slot in buf.as_chunks_mut::<4>().0 {
             let Some(word) = words.next() else {
                 break;
             };
             slot.copy_from_slice(&word.to_le_bytes());
         }
+
         block_device.write_block(BlockIndex::from_raw((start + offset) as u32), &buf);
     }
     debug_assert!(words.next().is_none());

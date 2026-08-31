@@ -1,4 +1,5 @@
 #![cfg_attr(not(test), no_std)]
+#![allow(clippy::len_without_is_empty)]
 extern crate alloc;
 use alloc::boxed::Box;
 use alloc::vec;
