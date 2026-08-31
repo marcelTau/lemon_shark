@@ -3,12 +3,11 @@
 
 use core::arch::global_asm;
 use lemon_shark::{
-    device_tree,
+    ALLOCATOR, device_tree,
     filesystem::{self, KernelBlockDevice},
     interrupts,
     kernel_layout::KernelLayout,
     logo, page_frame_allocator, page_table, println, riscv, shell, timer, trap_handler, virtio2,
-    ALLOCATOR,
 };
 
 // This is the section that we mapped first in the linker script `linker.ld`
@@ -35,11 +34,12 @@ extern "C" fn _start(_: usize, device_table_addr: usize) -> ! {
     log::warn!("========== Kernel started ==========");
     log::info!("{kernel_layout:#x?}");
 
+    device_tree::init(device_table_addr).expect("failed to initialize device tree");
+    virtio2::init_console();
+
     riscv::asm::sie::probe();
 
-    virtio2::init_console();
     trap_handler::init(kernel_layout);
-    device_tree::init(device_table_addr).expect("failed to initialize device tree");
     timer::init(device_tree::timer_frequency());
 
     page_frame_allocator::init(kernel_layout);

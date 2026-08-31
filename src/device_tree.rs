@@ -15,9 +15,10 @@ struct SystemInfo {
     memory_regions: Vec<PhysRange>,
     reserved_memory_regions: Vec<PhysRange>,
     mmio_regions: Vec<PhysRange>,
+    virtio_mmio_regions: Vec<PhysRange>,
     fdt_range: PhysRange,
     total_memory: usize,
-    block_device_addr: Option<usize>,
+    block_device_region: Option<PhysRange>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -62,6 +63,33 @@ fn node_has_compatible(node: &fdt::node::FdtNode<'_, '_>, expected: &str) -> boo
 
 fn node_is_kernel_mmio_device(node: &fdt::node::FdtNode<'_, '_>) -> bool {
     node_has_compatible(node, "ns16550a") || node_has_compatible(node, "virtio,mmio")
+}
+
+/// Collect the exact register windows of enabled VirtIO MMIO transports.
+///
+/// Unlike [`collect_mmio_regions`], these ranges retain the device-tree resource boundaries. They
+/// are therefore suitable for constructing a typed MMIO transport. Page-table construction uses
+/// the page-covered, normalized ranges returned by `collect_mmio_regions` instead.
+fn collect_virtio_mmio_regions(fdt: &fdt::Fdt<'_>) -> Result<Vec<PhysRange>, DeviceTreeError> {
+    let mut ranges = Vec::new();
+
+    for node in fdt
+        .all_nodes()
+        .filter(node_is_enabled)
+        .filter(|node| node_has_compatible(node, "virtio,mmio"))
+    {
+        let regions = node.reg().ok_or(DeviceTreeError::MissingMmioReg)?;
+
+        for region in regions {
+            let size = region.size.ok_or(DeviceTreeError::MissingRegionSize)?;
+            ranges.push(PhysRange::from_start_size(
+                region.starting_address as usize,
+                size,
+            )?);
+        }
+    }
+
+    Ok(ranges)
 }
 
 /// Collect all enabled nodes whose `device_type` is `memory`.
@@ -168,6 +196,7 @@ impl SystemInfo {
         let memory_regions = collect_memory_regions(&fdt)?;
         let reserved_memory_regions = collect_reserved_memory_regions(&fdt)?;
         let mmio_regions = collect_mmio_regions(&fdt)?;
+        let virtio_mmio_regions = collect_virtio_mmio_regions(&fdt)?;
         let fdt_range = PhysRange::from_start_size(fdt_addr, fdt.total_size())?;
         let total_memory = memory_regions.iter().try_fold(0usize, |total, range| {
             total
@@ -175,23 +204,30 @@ impl SystemInfo {
                 .ok_or(DeviceTreeError::AddressOverflow)
         })?;
 
-        let mut block_device_addr = None;
+        const VIRTIO_DEVICE_ID_OFFSET: usize = 0x008;
+        const VIRTIO_BLOCK_DEVICE_ID: u32 = 2;
 
-        for node in fdt.all_nodes().filter(node_is_enabled) {
-            if node_has_compatible(&node, "virtio,mmio")
-                && let Some(mut reg) = node.reg()
-                && let Some(region) = reg.next()
+        let mut block_device_region = None;
+
+        for region in virtio_mmio_regions.iter() {
+            let device_id_addr = region.start() + VIRTIO_DEVICE_ID_OFFSET;
+            if region.size() < VIRTIO_DEVICE_ID_OFFSET + core::mem::size_of::<u32>()
+                || device_id_addr % core::mem::align_of::<u32>() != 0
             {
-                let addr = region.starting_address as usize;
+                log::warn!(
+                    "VirtIO MMIO region cannot safely expose its device ID register: {region:?}"
+                );
+                continue;
+            }
 
-                // Probe the VirtIO device ID to distinguish the block device
-                // from the other VirtIO MMIO transports.
-                //
-                // TODO(mt): refer to docs here to avoid magic 0x008 value.
-                let device_id = unsafe { core::ptr::read_volatile((addr + 0x008) as *const u32) };
-                if device_id == 2 {
-                    block_device_addr = Some(addr);
-                }
+            // SAFETY: `region` is the exact `reg` resource of an enabled node whose compatible
+            // list contains `virtio,mmio`. The checks above establish that its device-ID register
+            // is contained and aligned, the early boot address space makes the physical MMIO
+            // address directly accessible, and no VirtIO transport has been constructed before
+            // device-tree initialization.
+            let device_id = unsafe { core::ptr::read_volatile(device_id_addr as *const u32) };
+            if device_id == VIRTIO_BLOCK_DEVICE_ID {
+                block_device_region = Some(*region);
             }
         }
 
@@ -211,9 +247,10 @@ impl SystemInfo {
             memory_regions,
             reserved_memory_regions,
             mmio_regions,
+            virtio_mmio_regions,
             fdt_range,
             total_memory,
-            block_device_addr,
+            block_device_region,
         };
 
         log::info!("memory regions: {:?}", system_info.memory_regions);
@@ -268,6 +305,11 @@ pub(crate) fn system_mmio_regions() -> &'static [PhysRange] {
     &system_info().mmio_regions
 }
 
+/// Exact `reg` resources of enabled `virtio,mmio` device-tree nodes.
+pub(crate) fn system_virtio_mmio_regions() -> &'static [PhysRange] {
+    &system_info().virtio_mmio_regions
+}
+
 pub(crate) fn fdt_range() -> PhysRange {
     system_info().fdt_range
 }
@@ -280,9 +322,9 @@ pub(crate) fn cpu_isa() -> String {
     system_info().cpu_isa.clone()
 }
 
-pub(crate) fn block_device_addr() -> usize {
+pub(crate) fn block_device_region() -> PhysRange {
     system_info()
-        .block_device_addr
+        .block_device_region
         .expect("no enabled VirtIO block device was found in the device tree")
 }
 
@@ -294,21 +336,19 @@ pub fn mmio_regions(fdt_addr: usize) -> Result<Vec<PhysRange>, DeviceTreeError> 
     collect_mmio_regions(&fdt)
 }
 
+/// Return the exact register windows of all enabled VirtIO MMIO nodes from an early-boot FDT.
+pub fn virtio_mmio_regions(fdt_addr: usize) -> Result<Vec<PhysRange>, DeviceTreeError> {
+    let fdt = unsafe { fdt::Fdt::from_ptr(fdt_addr as *const u8) }
+        .map_err(|_| DeviceTreeError::InvalidFdt)?;
+
+    collect_virtio_mmio_regions(&fdt)
+}
+
 /// Return all VirtIO MMIO devices from an FDT supplied during early boot.
 pub fn virtio_mmio_devices(fdt_addr: usize) -> Vec<usize> {
-    let fdt =
-        unsafe { fdt::Fdt::from_ptr(fdt_addr as *const u8) }.expect("Could not read device tree");
-
-    let mut devices = Vec::new();
-
-    for node in fdt.all_nodes().filter(node_is_enabled) {
-        if node_has_compatible(&node, "virtio,mmio")
-            && let Some(mut reg) = node.reg()
-            && let Some(region) = reg.next()
-        {
-            devices.push(region.starting_address as usize);
-        }
-    }
-
-    devices
+    virtio_mmio_regions(fdt_addr)
+        .expect("Could not read VirtIO MMIO resources from device tree")
+        .into_iter()
+        .map(PhysRange::start)
+        .collect()
 }

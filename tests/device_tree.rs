@@ -57,6 +57,20 @@ fn virtio_mmio_device_present() {
 }
 
 #[test_case]
+fn virtio_mmio_resources_preserve_device_boundaries() {
+    let fdt_addr = unsafe { FDT_ADDR };
+    let regions = device_tree::virtio_mmio_regions(fdt_addr).unwrap();
+
+    assert_eq!(regions.len(), 8, "unexpected VirtIO resources: {regions:?}");
+    assert!(
+        regions
+            .iter()
+            .all(|region| region.size() == 0x1000 && region.start() != 0x10000000),
+        "VirtIO resources included a non-VirtIO page or lost their exact sizes: {regions:?}",
+    );
+}
+
+#[test_case]
 fn kernel_mmio_regions_cover_uart_and_virtio_devices() {
     let fdt_addr = unsafe { FDT_ADDR };
     let regions = device_tree::mmio_regions(fdt_addr).unwrap();

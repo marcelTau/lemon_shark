@@ -1,7 +1,7 @@
 use virtio_drivers::device::blk::VirtIOBlk;
 use virtio_drivers::device::console::VirtIOConsole;
 use virtio_drivers::transport::Transport;
-use virtio_drivers::transport::mmio::{MmioTransport, VirtIOHeader};
+use virtio_drivers::transport::mmio::{MmioError, MmioTransport, VirtIOHeader};
 use virtio_drivers::{BufferDirection, Hal, PAGE_SIZE, PhysAddr};
 
 extern crate alloc;
@@ -11,31 +11,60 @@ use crate::device_tree;
 
 use crate::filesystem::BlockIndex;
 use core::ptr::NonNull;
-use spin::Mutex;
+use core::sync::atomic::{AtomicBool, Ordering};
+use spin::{Mutex, Once};
 
 static CONSOLE: Mutex<Option<VirtIOConsole<DeviceAllocator, MmioTransport<'static>>>> =
     Mutex::new(None);
+static CONSOLE_INIT: Once<()> = Once::new();
+static BLOCK_DEVICE_CLAIMED: AtomicBool = AtomicBool::new(false);
 
-/// Initialise the VirtIO console device at MMIO slot 0x10007000.
+/// Initialise the VirtIO console device exposed by the device tree.
 /// Must be called after the allocator is initialised.
 pub fn init_console() {
-    // Scan all 8 virtio MMIO slots to find the console device.
-    // Slots are at 0x10001000..=0x10008000 in 0x1000 increments.
+    CONSOLE_INIT.call_once(init_console_once);
+}
+
+fn init_console_once() {
     use virtio_drivers::transport::DeviceType;
-    for slot in (0x10001000usize..=0x10008000).step_by(0x1000) {
-        let header = NonNull::new(slot as *mut VirtIOHeader).unwrap();
-        let transport = match unsafe { MmioTransport::new(header, 0x1000) } {
-            Ok(t) => t,
-            Err(_) => continue,
-        };
-        if transport.device_type() == DeviceType::Console {
-            if let Ok(console) = VirtIOConsole::<DeviceAllocator, MmioTransport>::new(transport) {
-                *CONSOLE.lock() = Some(console);
-                crate::klog::flush_early_buffer();
-                return;
+
+    // The exact DT resources preserve the fact that every candidate implements the VirtIO MMIO
+    // register interface. Generic page-table MMIO ranges cannot provide that guarantee because
+    // they are page-covered and may be merged with adjacent devices such as the UART.
+    for region in device_tree::system_virtio_mmio_regions() {
+        if region.start() % core::mem::align_of::<VirtIOHeader>() != 0 {
+            log::warn!("Unaligned DT-declared VirtIO MMIO transport: {region:?}");
+            continue;
+        }
+
+        let header = NonNull::new(region.start() as *mut VirtIOHeader)
+            .expect("a VirtIO MMIO resource cannot start at the null address");
+
+        // SAFETY: `region` is the exact `reg` resource of an enabled `virtio,mmio` DT node. It is
+        // directly accessible during early boot and remains identity-mapped after paging is
+        // enabled. This initialization path has exclusive access to each candidate, and a retained
+        // transport is never probed again here.
+        let transport = match unsafe { MmioTransport::new(header, region.size()) } {
+            Ok(transport) => transport,
+            // Device ID zero denotes an unused VirtIO MMIO transport slot. The driver crate also
+            // uses this error for device IDs it does not yet recognize; neither is a console.
+            Err(MmioError::InvalidDeviceID(_)) => continue,
+            Err(error) => {
+                log::warn!("Invalid DT-declared VirtIO MMIO transport at {region:?}: {error}");
+                continue;
             }
+        };
+
+        if transport.device_type() == DeviceType::Console
+            && let Ok(console) = VirtIOConsole::<DeviceAllocator, MmioTransport>::new(transport)
+        {
+            *CONSOLE.lock() = Some(console);
+            crate::klog::flush_early_buffer();
+            return;
         }
     }
+
+    panic!("Could not find console");
 }
 
 /// Write bytes to the VirtIO console log channel.
@@ -57,11 +86,20 @@ pub struct LockedBlockDevice<'a> {
 
 impl LockedBlockDevice<'_> {
     fn new() -> Self {
-        let block_device_addr = device_tree::block_device_addr();
-        let header = NonNull::new(block_device_addr as *mut VirtIOHeader).unwrap();
+        let region = device_tree::block_device_region();
+        assert_eq!(
+            region.start() % core::mem::align_of::<VirtIOHeader>(),
+            0,
+            "unaligned VirtIO block-device MMIO resource: {region:?}",
+        );
+        let header = NonNull::new(region.start() as *mut VirtIOHeader)
+            .expect("a VirtIO MMIO resource cannot start at the null address");
 
-        let transport = unsafe { MmioTransport::new(header, 0x1000) }
-            .unwrap_or_else(|e| panic!("Error creating VirtIO MMIO transport: {}", e));
+        // SAFETY: `region` is the exact resource of the block transport discovered from an enabled
+        // `virtio,mmio` DT node. It remains identity-mapped for the lifetime of the device, and no
+        // other live transport or raw MMIO access aliases this register window.
+        let transport = unsafe { MmioTransport::new(header, region.size()) }
+            .unwrap_or_else(|e| panic!("Error creating VirtIO MMIO transport: {e}"));
 
         Self {
             disk: VirtIOBlk::<DeviceAllocator, MmioTransport>::new(transport).unwrap(),
@@ -86,9 +124,14 @@ impl LockedBlockDevice<'_> {
 }
 
 pub fn make_device() -> LockedBlockDevice<'static> {
+    assert!(
+        !BLOCK_DEVICE_CLAIMED.swap(true, Ordering::AcqRel),
+        "the VirtIO block device has already been claimed",
+    );
     LockedBlockDevice::new()
 }
 
+// TODO(mt): we have virtual memory now. What do we need to change here.
 /// Simple allocator for the device. This is very simple as we're not having
 /// virtual memory yet so most functions don't do much.
 pub struct DeviceAllocator;
