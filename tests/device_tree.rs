@@ -75,7 +75,26 @@ fn kernel_mmio_regions_cover_uart_and_virtio_devices() {
     let fdt_addr = unsafe { FDT_ADDR };
     let regions = device_tree::mmio_regions(fdt_addr).unwrap();
 
-    assert_eq!(regions.len(), 1, "unexpected MMIO ranges: {regions:?}");
-    assert_eq!(regions[0].start(), 0x10000000);
-    assert_eq!(regions[0].end(), 0x10009000);
+    assert_eq!(regions.len(), 2, "unexpected MMIO ranges: {regions:?}");
+    assert_eq!(regions[0].start(), 0x0c000000);
+    assert_eq!(regions[0].end(), 0x0c600000);
+    assert_eq!(regions[1].start(), 0x10000000);
+    assert_eq!(regions[1].end(), 0x10009000);
+}
+
+#[test_case]
+fn console_interrupt_devices_are_discovered() {
+    let fdt_addr = unsafe { FDT_ADDR };
+    let (uart, plic) = device_tree::interrupt_devices(fdt_addr).unwrap();
+
+    assert_eq!(uart.mmio_region.start(), 0x10000000);
+    assert_eq!(uart.mmio_region.size(), 0x100);
+    assert_eq!(uart.interrupt_id, 10);
+
+    assert_eq!(plic.mmio_region.start(), 0x0c000000);
+    assert_eq!(plic.mmio_region.size(), 0x600000);
+    assert_eq!(plic.num_sources, 95);
+    assert_eq!(plic.supervisor_contexts.len(), 1);
+    assert_eq!(plic.supervisor_contexts[0].hart_id, 0);
+    assert_eq!(plic.supervisor_contexts[0].context_index, 1);
 }

@@ -3,8 +3,10 @@ use core::arch::naked_asm;
 
 use crate::kernel_layout::KernelLayout;
 use crate::riscv;
+use crate::riscv::Scause;
 use crate::riscv::ScauseReason;
 use crate::riscv::Stvec;
+use crate::timer;
 
 /// Saved state of a process at the point it was interrupted.
 ///
