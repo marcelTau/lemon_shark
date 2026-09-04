@@ -35,6 +35,10 @@ impl PhysRange {
         Ok(Self { start, end })
     }
 
+    pub const fn contains(&self, val: usize) -> bool {
+        val >= self.start && val < self.end
+    }
+
     pub const fn start(self) -> usize {
         self.start
     }

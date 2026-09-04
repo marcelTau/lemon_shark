@@ -5,7 +5,7 @@ use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use crate::riscv;
+use crate::{riscv, uart};
 
 use crate::{print, println};
 
@@ -45,110 +45,36 @@ impl CommandHistory {
     }
 }
 
-enum InputState {
-    Normal,
-    Escape,
-    ControlSequence,
-}
-
-fn redraw_line(line: &str) {
-    print!("\r\x1b[2K> {line}");
-}
+const ASCII_BACKSPACE: u8 = 8;
+const ASCII_DELETE: u8 = 127;
 
 /// To read from the UART, we need to check wether there is some data available
 /// by reading the Line status register and check for the set bit.
-fn read_line_and_display(history: &CommandHistory) -> String {
-    const UART: usize = 0x10_000_000;
-    const RECEIVE_BUFFER_REGISTER_OFFSET: usize = 0;
-    const LINE_STATUS_REGISTER_OFFSET: usize = 5;
-    const ASCII_ESCAPE: u8 = 27;
-    const ASCII_BACKSPACE: u8 = 8;
-    const ASCII_DELETE: u8 = 127;
+fn read_line_and_display() -> String {
+    let mut cmd = String::new();
 
-    let uart = UART as *const u8;
+    print!("hai> ");
+    loop {
+        let byte = uart::read_byte_blocking();
 
-    let mut s = String::new();
-    let mut draft = String::new();
-    let mut history_index = history.entries.len();
-    let mut input_state = InputState::Normal;
-
-    print!("> ");
-
-    unsafe {
-        loop {
-            if uart.add(LINE_STATUS_REGISTER_OFFSET).read_volatile() & 0x1 != 0 {
-                let c = uart.add(RECEIVE_BUFFER_REGISTER_OFFSET).read_volatile();
-
-                // TODO(mt): I don't know if this is just QEMU but when pressing
-                // enter, it first does a '\r' so we can use this to end the
-                // line.
-                if c == b'\r' {
-                    print!("\n");
-                    break;
-                }
-
-                match input_state {
-                    InputState::Escape => {
-                        // ANSI control sequences begin with ESC followed by `[`. Arrow
-                        // keys then provide one final byte identifying the direction.
-                        input_state = if c == b'[' {
-                            InputState::ControlSequence
-                        } else {
-                            InputState::Normal
-                        };
-                        continue;
-                    }
-                    InputState::ControlSequence => {
-                        input_state = InputState::Normal;
-
-                        match c {
-                            b'A' if history_index > 0 => {
-                                // ESC [ A: Up arrow
-                                if history_index == history.entries.len() {
-                                    draft = s.clone();
-                                }
-                                history_index -= 1;
-                                s.clone_from(&history.entries[history_index]);
-                                redraw_line(&s);
-                            }
-                            b'B' if history_index < history.entries.len() => {
-                                // ESC [ B: Down arrow
-                                history_index += 1;
-                                if history_index == history.entries.len() {
-                                    s.clone_from(&draft);
-                                } else {
-                                    s.clone_from(&history.entries[history_index]);
-                                }
-                                redraw_line(&s);
-                            }
-                            _ => {}
-                        }
-                        continue;
-                    }
-                    InputState::Normal => {}
-                }
-
-                if c == ASCII_ESCAPE {
-                    input_state = InputState::Escape;
-                    continue;
-                }
-
-                // Terminals commonly send either DEL or BS for the backspace key.
-                if c == ASCII_DELETE || c == ASCII_BACKSPACE {
-                    if s.pop().is_some() {
-                        print!("\x08 \x08");
-                    }
-                    continue;
-                }
-
-                print!("{}", c as char);
-
-                s.push(c as char);
-            }
+        if byte == b'\r' {
+            print!("\n");
+            break;
         }
+
+        // Terminals commonly send either DEL or BS for the backspace key.
+        if byte == ASCII_DELETE || byte == ASCII_BACKSPACE {
+            if cmd.pop().is_some() {
+                print!("\x08 \x08");
+            }
+            continue;
+        }
+
+        print!("{}", byte as char);
+        cmd.push(byte as char);
     }
 
-    s
+    cmd
 }
 
 fn hello() {
@@ -429,7 +355,7 @@ pub fn shell() -> ! {
     let mut history = CommandHistory::new();
 
     loop {
-        let line = read_line_and_display(&history);
+        let line = read_line_and_display();
         history.push(line.clone());
 
         match ShellCommand::from_line(&line) {

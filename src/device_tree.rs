@@ -19,7 +19,7 @@ pub struct PlicContext {
     pub context_index: usize,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct PlicInfo {
     pub mmio_region: PhysRange,
     pub num_sources: usize,
@@ -392,7 +392,7 @@ impl SystemInfo {
         for region in virtio_mmio_regions.iter() {
             let device_id_addr = region.start() + VIRTIO_DEVICE_ID_OFFSET;
             if region.size() < VIRTIO_DEVICE_ID_OFFSET + core::mem::size_of::<u32>()
-                || device_id_addr % core::mem::align_of::<u32>() != 0
+                || device_id_addr.is_multiple_of(32)
             {
                 log::warn!(
                     "VirtIO MMIO region cannot safely expose its device ID register: {region:?}"

@@ -16,12 +16,15 @@ pub mod klog;
 pub mod logo;
 pub mod page_frame_allocator;
 pub mod page_table;
+pub mod plic;
 pub mod println;
 pub mod ramdisk;
+pub mod ring_buffer;
 pub mod riscv;
 pub mod shell;
 pub mod timer;
 pub mod trap_handler;
+pub mod uart;
 pub mod virtio;
 pub mod virtio2;
 
