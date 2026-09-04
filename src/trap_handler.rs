@@ -2,6 +2,7 @@ use core::arch::asm;
 use core::arch::naked_asm;
 
 use crate::kernel_layout::KernelLayout;
+use crate::plic;
 use crate::riscv;
 use crate::riscv::Scause;
 use crate::riscv::ScauseReason;
@@ -275,6 +276,12 @@ extern "C" fn trap_handler_rust(frame: *mut TrapFrame) {
     match scause.reason() {
         ScauseReason::SupervisorTimerInterrupt => {
             timer::handle_interrupt();
+        }
+        ScauseReason::SupervisorExternalInterrupt => {
+            // External interrupts all are triggered by the PLIC right now. Not sure if there will
+            // be other external interrupt sources later on but for now hand off to the PLIC
+            // handler.
+            plic::handle_external_interrupt();
         }
         ScauseReason::Breakpoint => {
             let sepc = frame.sepc;

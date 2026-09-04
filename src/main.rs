@@ -3,12 +3,12 @@
 
 use core::arch::global_asm;
 use lemon_shark::{
-    device_tree,
+    ALLOCATOR, device_tree,
     filesystem::{self, KernelBlockDevice},
     interrupts,
     kernel_layout::KernelLayout,
-    logo, page_frame_allocator, page_table, println, riscv, shell, timer, trap_handler, virtio2,
-    ALLOCATOR,
+    logo, page_frame_allocator, page_table, plic, println, riscv, shell, timer, trap_handler, uart,
+    virtio2,
 };
 
 // This is the section that we mapped first in the linker script `linker.ld`
@@ -41,6 +41,7 @@ extern "C" fn _start(_: usize, device_table_addr: usize) -> ! {
     riscv::asm::sie::probe();
 
     trap_handler::init(kernel_layout);
+    plic::init().expect("Could not initialize PLIC");
     timer::init(device_tree::timer_frequency());
 
     page_frame_allocator::init(kernel_layout);
@@ -50,7 +51,7 @@ extern "C" fn _start(_: usize, device_table_addr: usize) -> ! {
     filesystem::init_with_device(KernelBlockDevice::VirtIO(virtio_device));
 
     println!("{}", logo::SHARK);
-    println!("Welcome to LemonShark v0.0.1");
+    println!("Welcome to LemonShark v0.1.0");
 
     log::warn!(
         "========== Boot completed {}ms ==========",
@@ -60,6 +61,9 @@ extern "C" fn _start(_: usize, device_table_addr: usize) -> ! {
     // Program the first deadline before making timer interrupts observable.
     // Global interrupts are enabled only after boot initialization is complete.
     timer::new_time(1);
+
+    uart::init();
+
     interrupts::init();
 
     shell::shell()
