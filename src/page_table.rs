@@ -97,7 +97,9 @@ pub fn init(kernel_layout: KernelLayout) {
             "li t1, 0xFFFFFFFF00000000",
             "add t0, t0, t1",   // add the offset to it
             "jalr zero, t0, 0", // jump there
-            "1:"
+            "1:",
+            out("t0") _, // declare `t0` and `t1` as clobbered
+            out("t1") _
         )
     }
 
