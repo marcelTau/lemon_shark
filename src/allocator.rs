@@ -44,7 +44,10 @@ impl LockedAllocator {
     }
 
     pub fn stats(&self) -> MemoryStats {
-        (*self.inner.lock()).stats()
+        interrupts::without_interrupts(|| {
+            let allocator = self.inner.lock();
+            (*allocator).stats()
+        })
     }
 }
 
