@@ -1,7 +1,10 @@
 use spin::Once;
 
 use crate::riscv;
-use core::sync::atomic::{AtomicUsize, Ordering};
+use core::{
+    sync::atomic::{AtomicUsize, Ordering},
+    time::Duration,
+};
 
 /// Stores the hardware timebase frequency locally so timer operations do not
 /// depend on the device-tree subsystem after initialization.
@@ -32,9 +35,11 @@ static INTERRUPT_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// Program a timer deadline `secs` seconds from the current hardware time.
 ///
 /// [`init`] must be called before this function.
-pub fn new_time(secs: usize) {
+pub fn new_time(duration: Duration) {
     const TIME_FN: usize = 0x54494D45;
-    let time = freq() * secs;
+
+    let millis = duration.as_millis() as usize;
+    let time = freq() / 1_000 * millis;
 
     let error: usize;
 
@@ -64,7 +69,7 @@ pub fn new_time(secs: usize) {
 /// trap handler remains responsible only for dispatching the trap cause.
 pub(crate) fn handle_interrupt() {
     INTERRUPT_COUNT.fetch_add(1, Ordering::Relaxed);
-    new_time(1);
+    new_time(Duration::from_millis(10));
 }
 
 pub fn interrupt_count() -> usize {

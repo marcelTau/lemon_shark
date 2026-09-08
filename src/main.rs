@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
 
-use core::arch::global_asm;
+use core::{arch::global_asm, time::Duration};
 use lemon_shark::{
     ALLOCATOR, device_tree,
     filesystem::{self, KernelBlockDevice},
@@ -60,7 +60,7 @@ extern "C" fn _start(_: usize, device_table_addr: usize) -> ! {
 
     // Program the first deadline before making timer interrupts observable.
     // Global interrupts are enabled only after boot initialization is complete.
-    timer::new_time(1);
+    timer::new_time(Duration::from_millis(10));
 
     uart::init();
 

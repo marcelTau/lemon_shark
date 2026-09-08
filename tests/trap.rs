@@ -7,6 +7,7 @@
 mod common;
 
 use core::arch::{asm, global_asm};
+use core::time::Duration;
 
 use lemon_shark::trap_handler::{self, TrapFrame};
 use lemon_shark::{ALLOCATOR, device_tree, riscv, timer};
@@ -526,7 +527,7 @@ fn recurring_timer_interrupts_return_and_preserve_interrupt_state() {
 
     // The first deadline is immediately due. Interrupts two and three must
     // come from the one-second deadline programmed by the handler itself.
-    timer::new_time(0);
+    timer::new_time(Duration::ZERO);
 
     for interrupt_index in 1..=REQUIRED_INTERRUPTS {
         let expected_count = initial_count + interrupt_index;

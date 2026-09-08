@@ -1,5 +1,6 @@
 extern crate alloc;
 use core::str::FromStr;
+use core::time::Duration;
 
 use alloc::boxed::Box;
 use alloc::string::String;
@@ -301,7 +302,9 @@ impl ShellCommand {
             ShellCommand::MemoryDump => memory(),
             ShellCommand::Bench { n, size } => benchmark_allocator(*n, *size),
             ShellCommand::Allocate { size } => shell_allocate(*size),
-            ShellCommand::Timer { secs } => crate::timer::new_time(*secs),
+            ShellCommand::Timer { secs } => {
+                crate::timer::new_time(Duration::from_secs(*secs as u64))
+            }
             ShellCommand::Ls { path: dir } => {
                 if let Err(e) = crate::filesystem::api::dump_dir(dir) {
                     println!("ls failed: {e:?}");
@@ -330,8 +333,12 @@ impl ShellCommand {
                 Err(e) => println!("cat failed: {e:?}"),
             },
             ShellCommand::Uptime => {
-                let time = crate::timer::uptime();
-                println!("Currently running for {time}s");
+                let uptime_ms = crate::timer::uptime_ms();
+
+                let time: f64 = uptime_ms as f64 / 1000.0;
+
+                let irqs = crate::timer::interrupt_count();
+                println!("Currently running for {time}s with {irqs} interrupts");
             }
             ShellCommand::Write { path, text } => {
                 if let Err(e) = crate::filesystem::api::write_to_file(path, text.clone()) {
