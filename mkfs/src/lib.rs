@@ -273,7 +273,7 @@ fn validate_output_location(source: &Path, output: &Path) -> Result<(), BuildErr
         .file_name()
         .filter(|name| !name.is_empty())
         .ok_or_else(|| BuildError::new("output must name an image file"))?;
-    let output_parent = output.parent().unwrap_or_else(|| Path::new("."));
+    let output_parent = path_parent_or_current(output);
     let output_parent = fs::canonicalize(output_parent)
         .map_err(|error| io_error("resolve output directory", output_parent, error))?;
     let output = output_parent.join(output_name);
@@ -297,7 +297,7 @@ fn create_temporary_image(
         .file_name()
         .filter(|name| !name.is_empty())
         .ok_or_else(|| BuildError::new("output must name an image file"))?;
-    let parent = output.parent().unwrap_or_else(|| Path::new("."));
+    let parent = path_parent_or_current(output);
 
     for attempt in 0..100 {
         let mut temporary_name = file_name.to_os_string();
@@ -314,6 +314,12 @@ fn create_temporary_image(
         "could not allocate a temporary image beside {}",
         output.display()
     )))
+}
+
+fn path_parent_or_current(path: &Path) -> &Path {
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
 }
 
 fn import_directory(
@@ -476,6 +482,22 @@ mod tests {
         assert!(Command::parse(strings(&["--blocks", "zero"])).is_err());
         assert!(Command::parse(strings(&["--blocks", "0"])).is_err());
         assert!(Command::parse(strings(&["--output", "one", "--output", "two"])).is_err());
+    }
+
+    #[test]
+    fn treats_an_empty_output_parent_as_the_current_directory() {
+        assert_eq!(
+            path_parent_or_current(Path::new("root.img")),
+            Path::new(".")
+        );
+        assert_eq!(
+            path_parent_or_current(Path::new("./root.img")),
+            Path::new(".")
+        );
+        assert_eq!(
+            path_parent_or_current(Path::new("images/root.img")),
+            Path::new("images")
+        );
     }
 
     #[test]
