@@ -226,6 +226,7 @@ impl PageTable {
             *l2_entry = PageTableEntry::new_branch(frame);
         }
 
+        // TODO(mt): this assumes that we only have 4KiB pages and not have huge pages etc.
         let l1_table = unsafe { &mut *(l2_entry.ppn() as *mut PageTable) };
         let l1_entry = l1_table.get_mut(virt.vpn(Level::L1));
 
