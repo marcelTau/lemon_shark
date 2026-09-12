@@ -54,7 +54,7 @@ const ASCII_DELETE: u8 = 127;
 fn read_line_and_display() -> String {
     let mut cmd = String::new();
 
-    print!("\x1b[33m🍋\x1b[32m ->\x1b[0m ");
+    print!("reef $ ");
     loop {
         let byte = uart::read_byte_blocking();
 
