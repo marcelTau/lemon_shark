@@ -1,6 +1,6 @@
 use spin::Once;
 
-use crate::riscv;
+use crate::{process, riscv, trap_handler::TrapFrame};
 use core::{
     sync::atomic::{AtomicUsize, Ordering},
     time::Duration,
@@ -67,9 +67,14 @@ pub fn new_time(duration: Duration) {
 ///
 /// Keeping both operations here gives tests one observable event while the
 /// trap handler remains responsible only for dispatching the trap cause.
-pub(crate) fn handle_interrupt() {
+pub(crate) fn handle_interrupt(frame: *const TrapFrame) -> *const TrapFrame {
     INTERRUPT_COUNT.fetch_add(1, Ordering::Relaxed);
+
+    let new_frame = process::next(frame);
+
     new_time(Duration::from_millis(10));
+
+    new_frame
 }
 
 pub fn interrupt_count() -> usize {

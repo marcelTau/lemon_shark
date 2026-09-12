@@ -275,7 +275,8 @@ extern "C" fn trap_handler_rust(frame: *mut TrapFrame) {
 
     match scause.reason() {
         ScauseReason::SupervisorTimerInterrupt => {
-            timer::handle_interrupt();
+            let new_frame = timer::handle_interrupt(frame as *const TrapFrame);
+            unsafe { asm!("csrw sscratch, {}", in(reg) new_frame) };
         }
         ScauseReason::SupervisorExternalInterrupt => {
             // External interrupts all are triggered by the PLIC right now. Not sure if there will

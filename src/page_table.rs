@@ -13,8 +13,8 @@ pub(crate) fn new_identity_map(phys: PhysAddr) {
     let alloc = || page_frame_allocator::alloc_frame().unwrap();
     unsafe {
         (*&raw mut KERNEL_PAGE_TABLE).map(VirtAddr(phys), phys, flags, alloc);
-        asm!("sfence.vma");
     }
+    riscv::asm::flush_tlb();
 }
 
 /// This initializes the kernel page table, identity mapping all kernel pages and pages used for

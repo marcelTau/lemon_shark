@@ -27,6 +27,13 @@ impl From<Asid> for usize {
     }
 }
 
+// https://www.scs.stanford.edu/~zyedidia/docs/riscv/riscv-privileged.pdf Section: 4.1.1
+pub mod sstatus {
+    pub const SPP: usize = 1 << 8;
+    pub const SPIE: usize = 1 << 5;
+    pub const SIE: usize = 1 << 1;
+}
+
 // TODO(mt): also read about other CSR's (here)[https://people.eecs.berkeley.edu/~krste/papers/riscv-privileged-v1.9.1.pdf] Section 2.2
 
 /// Supervisor Interrupt Enabled
@@ -198,6 +205,17 @@ pub mod asm {
         value
     }
 
+    #[inline(always)]
+    pub fn sscratch() -> usize {
+        let value: usize;
+
+        unsafe {
+            core::arch::asm!("csrr {}, sscratch", out(reg) value, options(nomem, nostack));
+        }
+
+        value
+    }
+
     /// Disable supervisor interrupts and put this hart into an idle loop.
     pub fn halt() -> ! {
         unsafe {
@@ -211,16 +229,33 @@ pub mod asm {
         }
     }
 
+    /// Synchronizes page-table writes and invalidates all cached translations on this hart.
+    ///
+    /// Call after each operation that modifies the active page table (adding, removing,
+    /// or changing mappings or permissions), before relying on the updated mappings.
+    /// An operation may update several entries before calling this once. Even adding
+    /// a previously absent mapping requires synchronization: invalid entries can be cached.
+    ///
+    /// This executes `sfence.vma` for all virtual addresses and address spaces on the
+    /// current hart only; other harts using the page table need their own fence.
+    #[inline(always)]
+    pub fn flush_tlb() {
+        unsafe {
+            // Keep the default memory effects so page-table writes cannot move past the fence.
+            core::arch::asm!("sfence.vma", options(nostack));
+        }
+    }
+
     /// Writes the `satp` register with the given value, followed by a `sfence.vma` to flush the TLB.
     #[inline(always)]
     pub fn write_satp_and_flush_tlb(satp: Satp) {
         unsafe {
             core::arch::asm!(
                 "csrw satp, {satp}",
-                "sfence.vma",
                 satp = in(reg) satp.as_usize()
             );
         }
+        flush_tlb();
     }
 
     #[inline(always)]

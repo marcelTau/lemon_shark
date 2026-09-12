@@ -7,8 +7,8 @@ use lemon_shark::{
     filesystem::{self, KernelBlockDevice},
     interrupts,
     kernel_layout::KernelLayout,
-    logo, page_frame_allocator, page_table, plic, println, riscv, shell, timer, trap_handler, uart,
-    virtio2,
+    logo, page_frame_allocator, page_table, plic, println, process, riscv, shell, timer,
+    trap_handler, uart, virtio2,
 };
 
 // This is the section that we mapped first in the linker script `linker.ld`
@@ -24,6 +24,36 @@ global_asm!(
     "   la sp, _stack_top",
     "   call _start",
 );
+
+static COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+use core::sync::atomic::AtomicUsize;
+use core::sync::atomic::Ordering;
+
+fn proc1() {
+    let mut val = 0;
+    loop {
+        let res = COUNTER.compare_exchange(val, val + 1, Ordering::SeqCst, Ordering::SeqCst);
+
+        if let Ok(x) = res {
+            log::info!("proc1: {x}");
+            val += 2;
+        }
+    }
+}
+
+fn proc2() {
+    let mut val = 1;
+
+    loop {
+        let res = COUNTER.compare_exchange(val, val + 1, Ordering::SeqCst, Ordering::SeqCst);
+
+        if let Ok(x) = res {
+            log::info!("proc2: {x}");
+            val += 2;
+        }
+    }
+}
 
 #[unsafe(no_mangle)]
 extern "C" fn _start(_: usize, device_table_addr: usize) -> ! {
@@ -58,13 +88,18 @@ extern "C" fn _start(_: usize, device_table_addr: usize) -> ! {
         timer::uptime_ms()
     );
 
-    // Program the first deadline before making timer interrupts observable.
-    // Global interrupts are enabled only after boot initialization is complete.
-    timer::new_time(Duration::from_millis(10));
-
     uart::init();
 
+    // Program the first deadline before making timer interrupts observable.
+    // Global interrupts are enabled only after boot initialization is complete.
     interrupts::init();
 
-    shell::shell()
+    interrupts::without_interrupts(|| {
+        timer::new_time(Duration::from_millis(1));
+        process::schedule(proc1, "proc1");
+        process::schedule(proc2, "proc2");
+        process::schedule(shell::shell, "shell");
+        process::init();
+        process::start()
+    })
 }

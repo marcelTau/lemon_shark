@@ -335,10 +335,13 @@ impl ShellCommand {
             ShellCommand::Uptime => {
                 let uptime_ms = crate::timer::uptime_ms();
 
-                let time: f64 = uptime_ms as f64 / 1000.0;
+                // Use integer formatting: floating-point initialization and context
+                // saving/restoring are not set up in the kernel yet.
+                let secs = uptime_ms / 1000;
+                let millis = uptime_ms % 1000;
 
                 let irqs = crate::timer::interrupt_count();
-                println!("Currently running for {time}s with {irqs} interrupts");
+                println!("Currently running for {secs}.{millis:03}s with {irqs} interrupts");
             }
             ShellCommand::Write { path, text } => {
                 if let Err(e) = crate::filesystem::api::write_to_file(path, text.clone()) {
@@ -358,7 +361,7 @@ impl ShellCommand {
 
 /// This spawns a simple shell which let's the user input some commands
 /// and reads from the UART and outputs something based on the command.
-pub fn shell() -> ! {
+pub fn shell() {
     let mut history = CommandHistory::new();
 
     loop {
