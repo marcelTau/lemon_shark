@@ -33,6 +33,16 @@ impl FrameArena {
         Some(self.range.start() + index * PAGE_SIZE)
     }
 
+    fn alloc_contiguous(&mut self, pages: usize) -> Option<PhysAddr> {
+        let index = self.used.find_free_range(pages)?;
+
+        for i in 0..pages {
+            self.used.set(index + i as usize);
+        }
+
+        Some(self.range.start() + index * PAGE_SIZE)
+    }
+
     fn contains(&self, addr: PhysAddr) -> bool {
         self.range.start() <= addr && addr < self.range.end()
     }
@@ -105,6 +115,10 @@ impl PageFrameAllocator {
         self.arenas.iter_mut().find_map(FrameArena::alloc)
     }
 
+    fn alloc_contiguous(&mut self, pages: usize) -> Option<PhysAddr> {
+        self.arenas.iter_mut().find_map(|a| a.alloc_contiguous(pages))
+    }
+
     fn free(&mut self, addr: PhysAddr) -> bool {
         let Some(arena) = self.arenas.iter_mut().find(|arena| arena.contains(addr)) else {
             log::error!("cannot free frame {addr:#x}; it is outside every managed arena");
@@ -121,6 +135,10 @@ impl PageFrameAllocator {
 
 pub fn alloc_frame() -> Option<PhysAddr> {
     PAGE_FRAME_ALLOCATOR.lock().as_mut().unwrap().alloc()
+}
+
+pub fn alloc_contiguous(pages: usize) -> Option<PhysAddr> {
+    PAGE_FRAME_ALLOCATOR.lock().as_mut().unwrap().alloc_contiguous(pages)
 }
 
 pub fn free_frame(addr: PhysAddr) {

@@ -223,6 +223,17 @@ enum SchedulerError {
     NoRunnableTask,
 }
 
+/// Number of pages allocated as the stack for each task. 
+///
+/// TODO(mt): Later this might include a guard page at the bottom of the stack to prevent stack
+/// overflows. This would require unmapping the page in the page table. An access into this page
+/// would then cause an exception and the trap handler could then check if we're accessing a guard
+/// page and then kill? the task.
+///
+/// For now let's not worry too much about this. 4 pages should be enough to run the simple programs
+/// we're doing right now.
+const TASK_STACK_PAGES: usize = 4;
+
 impl Scheduler {
     /// Initializes the Scheduler with `MAX_TASKS` empty slots.
     const fn new() -> Self {
@@ -243,7 +254,7 @@ impl Scheduler {
         let exitable_task = ExitableTask::new(task);
 
         // Allocate the stack for the new task
-        let phys_sp = page_frame_allocator::alloc_frame().ok_or(SchedulerError::OutOfMemory)?;
+        let phys_sp = page_frame_allocator::alloc_contiguous(TASK_STACK_PAGES).ok_or(SchedulerError::OutOfMemory)?;
 
         // The stack grows downwards so put the stack pointer at the top of the stack. It's a
         // physical address which is fine in this case, as we're in the kernel address space and all
