@@ -17,6 +17,18 @@ pub(crate) fn new_identity_map(phys: PhysAddr) {
     riscv::asm::flush_tlb();
 }
 
+/// This function unmaps a page from virtual memory in order to create guard pages to avoid stack
+/// overflows. Since we're only working in the kernel address space right now and all kernel pages
+/// are identity mapped, we can take a [`PhysAddr`] here.
+pub fn unmap_identity_mapped_page(phys: PhysAddr) -> Result<(), virtual_memory::Error> {
+    unsafe {
+        (*&raw mut KERNEL_PAGE_TABLE).unmap(VirtAddr(phys))?;
+    }
+    riscv::asm::flush_tlb();
+
+    Ok(())
+}
+
 /// This initializes the kernel page table, identity mapping all kernel pages and pages used for
 /// MMIO. We also identity-map all allocator-managed RAM pages so that the kernel can reach them.
 ///

@@ -109,6 +109,7 @@ use alloc::boxed::Box;
 
 use crate::interrupts;
 use crate::page_frame_allocator;
+use crate::page_table;
 use crate::riscv;
 use crate::riscv::sstatus;
 use crate::trap_handler::TrapFrame;
@@ -221,9 +222,12 @@ enum SchedulerError {
 
     /// `next()` was called but there is nothing to run. Can't deal with this at the moment.
     NoRunnableTask,
+
+    /// Could not allocate the stack for a new task.
+    FailedAllocateStack,
 }
 
-/// Number of pages allocated as the stack for each task. 
+/// Number of pages allocated as the stack for each task.
 ///
 /// TODO(mt): Later this might include a guard page at the bottom of the stack to prevent stack
 /// overflows. This would require unmapping the page in the page table. An access into this page
@@ -254,12 +258,28 @@ impl Scheduler {
         let exitable_task = ExitableTask::new(task);
 
         // Allocate the stack for the new task
-        let phys_sp = page_frame_allocator::alloc_contiguous(TASK_STACK_PAGES).ok_or(SchedulerError::OutOfMemory)?;
+        let phys_sp = page_frame_allocator::alloc_contiguous(TASK_STACK_PAGES)
+            .ok_or(SchedulerError::FailedAllocateStack)?;
+
+        // Physical address of the guard page. The lowest page in the range
+        let guard_page = phys_sp;
 
         // The stack grows downwards so put the stack pointer at the top of the stack. It's a
         // physical address which is fine in this case, as we're in the kernel address space and all
         // available pages are idendity mapped.
-        let phys_sp = phys_sp + PAGE_SIZE;
+        let phys_sp = phys_sp + TASK_STACK_PAGES * PAGE_SIZE;
+
+        log::info!(
+            "Task {name} has guard-page at {:#x}-{:#x} and stack at {:#x}-{:#x}",
+            guard_page,
+            guard_page + PAGE_SIZE - 1,
+            guard_page + PAGE_SIZE,
+            phys_sp
+        );
+
+        if let Err(e) = page_table::unmap_identity_mapped_page(guard_page) {
+            log::error!("Could not unmap guard page {e:?}");
+        }
 
         // documented at top of file
         let sstatus = (sstatus::SPIE | sstatus::SPP) & !sstatus::SIE;
