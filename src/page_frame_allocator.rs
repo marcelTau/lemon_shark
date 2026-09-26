@@ -116,7 +116,9 @@ impl PageFrameAllocator {
     }
 
     fn alloc_contiguous(&mut self, pages: usize) -> Option<PhysAddr> {
-        self.arenas.iter_mut().find_map(|a| a.alloc_contiguous(pages))
+        self.arenas
+            .iter_mut()
+            .find_map(|a| a.alloc_contiguous(pages))
     }
 
     fn free(&mut self, addr: PhysAddr) -> bool {
@@ -137,8 +139,13 @@ pub fn alloc_frame() -> Option<PhysAddr> {
     PAGE_FRAME_ALLOCATOR.lock().as_mut().unwrap().alloc()
 }
 
+/// Returns the start address of the lowest page in the allocated range.
 pub fn alloc_contiguous(pages: usize) -> Option<PhysAddr> {
-    PAGE_FRAME_ALLOCATOR.lock().as_mut().unwrap().alloc_contiguous(pages)
+    PAGE_FRAME_ALLOCATOR
+        .lock()
+        .as_mut()
+        .unwrap()
+        .alloc_contiguous(pages)
 }
 
 pub fn free_frame(addr: PhysAddr) {
