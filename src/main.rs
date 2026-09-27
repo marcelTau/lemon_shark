@@ -3,12 +3,12 @@
 
 use core::{arch::global_asm, time::Duration};
 use lemon_shark::{
-    ALLOCATOR, device_tree,
+    device_tree,
     filesystem::{self, KernelBlockDevice},
     interrupts,
     kernel_layout::KernelLayout,
-    logo, page_frame_allocator, page_table, plic, println, process, riscv, shell, timer,
-    trap_handler, uart, virtio2,
+    logo, page_frame_allocator, page_table, plic, println, riscv, scheduler, shell, timer,
+    trap_handler, uart, virtio2, ALLOCATOR,
 };
 
 // This is the section that we mapped first in the linker script `linker.ld`
@@ -106,11 +106,11 @@ extern "C" fn _start(_: usize, device_table_addr: usize) -> ! {
 
     interrupts::without_interrupts(|| {
         timer::new_time(Duration::from_millis(1));
-        process::schedule(proc1, "proc1");
-        process::schedule(proc2, "proc2");
-        process::schedule(shell::shell, "shell");
-        process::schedule(stack_overflow, "stack_overflow");
-        process::init();
-        process::start()
+        scheduler::schedule(proc1, "proc1");
+        scheduler::schedule(proc2, "proc2");
+        scheduler::schedule(shell::shell, "shell");
+        scheduler::schedule(stack_overflow, "stack_overflow");
+        scheduler::init();
+        scheduler::start()
     })
 }

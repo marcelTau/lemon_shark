@@ -1,6 +1,6 @@
 use spin::Once;
 
-use crate::{process, riscv, trap_handler::TrapFrame};
+use crate::{riscv, scheduler, trap_handler::TrapFrame};
 use core::{
     sync::atomic::{AtomicUsize, Ordering},
     time::Duration,
@@ -70,7 +70,7 @@ pub fn new_time(duration: Duration) {
 pub(crate) fn handle_interrupt(frame: *const TrapFrame) -> *const TrapFrame {
     INTERRUPT_COUNT.fetch_add(1, Ordering::Relaxed);
 
-    let new_frame = process::next(frame);
+    let new_frame = scheduler::next(frame);
 
     new_time(Duration::from_millis(10));
 

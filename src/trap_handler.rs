@@ -5,11 +5,11 @@ use virtual_memory::PAGE_SIZE;
 
 use crate::kernel_layout::KernelLayout;
 use crate::plic;
-use crate::process;
 use crate::riscv;
 use crate::riscv::Scause;
 use crate::riscv::ScauseReason;
 use crate::riscv::Stvec;
+use crate::scheduler;
 use crate::timer;
 
 /// Saved state of a process at the point it was interrupted.
@@ -299,7 +299,7 @@ extern "C" fn trap_handler_rust(tframe: *mut TrapFrame) {
             if stval >= frame.guard_page && stval < frame.guard_page + PAGE_SIZE {
                 // kill the process, I think it has to be marked as dead and then actually killed when another process
                 // is running as otherwise we return to a dead process here.
-                let new_frame = process::kill_current_and_schedule_next(frame);
+                let new_frame = scheduler::kill_current_and_schedule_next(frame);
                 riscv::asm::write_sscratch(new_frame as usize);
             } else {
                 unreachable!("don't know yet but should be unreachable for now")

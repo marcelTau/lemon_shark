@@ -6,7 +6,7 @@ use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use crate::{process, riscv, uart};
+use crate::{riscv, scheduler, uart};
 
 use crate::{print, println};
 
@@ -306,7 +306,7 @@ impl ShellCommand {
             ShellCommand::Bench { n, size } => benchmark_allocator(*n, *size),
             ShellCommand::Allocate { size } => shell_allocate(*size),
             ShellCommand::Tasks => {
-                let state = process::state();
+                let state = scheduler::state();
                 println!("Process Info:");
                 for proc in state {
                     println!("\t{proc}");

@@ -22,6 +22,7 @@ pub mod process;
 pub mod ramdisk;
 pub mod ring_buffer;
 pub mod riscv;
+pub mod scheduler;
 pub mod shell;
 pub mod timer;
 pub mod trap_handler;
