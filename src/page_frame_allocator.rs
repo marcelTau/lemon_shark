@@ -130,6 +130,13 @@ impl PageFrameAllocator {
         arena.free(addr)
     }
 
+    fn free_contiguous(&mut self, start: PhysAddr, pages: usize) {
+        for offset in 0..pages {
+            let phys = start + offset * PAGE_SIZE;
+            self.free(phys);
+        }
+    }
+
     fn ranges(&self) -> Vec<PhysRange> {
         self.arenas.iter().map(|arena| arena.range).collect()
     }
@@ -146,6 +153,15 @@ pub fn alloc_contiguous(pages: usize) -> Option<PhysAddr> {
         .as_mut()
         .unwrap()
         .alloc_contiguous(pages)
+}
+
+/// Frees `pages` or memory from `start`.
+pub fn free_contiguous(start: PhysAddr, pages: usize) {
+    PAGE_FRAME_ALLOCATOR
+        .lock()
+        .as_mut()
+        .unwrap()
+        .free_contiguous(start, pages);
 }
 
 pub fn free_frame(addr: PhysAddr) {

@@ -110,14 +110,15 @@ use alloc::boxed::Box;
 use crate::interrupts;
 use crate::page_frame_allocator;
 use crate::page_table;
+use crate::println;
 use crate::riscv;
 use crate::riscv::sstatus;
 use crate::trap_handler::TrapFrame;
 use virtual_memory::PAGE_SIZE;
 
 /// The Process ID
-#[derive(Copy, Clone, Default, Debug)]
-struct Pid(i32);
+#[derive(Copy, Clone, Default, Debug, PartialEq, Eq)]
+pub struct Pid(i32);
 
 impl Pid {
     fn as_usize(self) -> usize {
@@ -130,7 +131,7 @@ impl Pid {
 }
 
 #[derive(Copy, Clone, Debug)]
-enum State {
+pub enum State {
     /// This process is available to run
     Runnable,
 
@@ -179,6 +180,8 @@ impl ExitableTask {
         Self { task }
     }
 
+    /// Note: [`extern "C"`] to fix the calling convention and be able to take a
+    /// pointer to `Self` as the first argument
     unsafe extern "C" fn run_with_exit(ptr: *const Self) {
         let task = unsafe { (*ptr).task };
         task();
@@ -187,7 +190,48 @@ impl ExitableTask {
 }
 
 fn exit_current() {
+    // On a normal exit of a `Task` there is no way we can return execution to that process ever
+    // again.
+    //
+    // The process is currently executing and the exit call should come from a trap i.e through a
+    // syscall so we should have the TrapFrame accessible and could just call the same
+    // `kill_current_and_schedule_next()` function but right now this is not what happens.
+    //
+    // Could we do it that way and implement our first syscall? We could have a
+    // SupervisorSoftwareInterrupt to create an interrupt which is handled as an exit syscall.
+    //
+    // This is something for another MR so it will not be implemented right away and this todo!()
+    // will stay for now.
+    //
+    // The idea:
+    //
+    // - trap handler checks for SupervisorSoftwareInterrupt as we currently only have kernel
+    // tasks.
+    // - when it's detected it checks the registers to understand which syscall was called
+    // and we implement exit in a similar way of how we're currently exiting when a stack overflow
+    // is found.
+    // - the `run_with_exit()` function is then just issuing this syscall at the end after running
+    // `task()` and thus transfers execution to the trap handler which then exits this task and
+    // hands execution over to the next task.
     todo!()
+}
+
+/// This function is **only** called from the trap handler when a task has to be killed
+/// and execution moves on to the next task.
+///
+/// Since this is called from the trap handler we do not need to worry about interrupts.
+pub fn kill_current_and_schedule_next(frame: *const TrapFrame) -> *const TrapFrame {
+    let mut sched = SCHEDULER.lock();
+    let current_pid = sched.current.unwrap();
+    let new_frame = sched.next(frame, Some(State::Exited)).unwrap();
+    sched.to_be_removed = Some(current_pid);
+
+    new_frame
+
+    // When a process is killed, we need to
+    // - remove it's state from the scheduler
+    // - free the stack
+    //   The stack are allocated pages set by `schedule()`. They need to be free'd in the page_frame_allocator.
 }
 
 const MAX_TASKS: usize = 20;
@@ -210,6 +254,9 @@ struct Scheduler {
 
     /// The [`Pid`] of the currently running process.
     current: Option<Pid>,
+
+    /// The [`Pid`] to be removed in the next `.next()` call.
+    to_be_removed: Option<Pid>,
 }
 
 #[derive(Debug)]
@@ -227,15 +274,8 @@ enum SchedulerError {
     FailedAllocateStack,
 }
 
-/// Number of pages allocated as the stack for each task.
-///
-/// TODO(mt): Later this might include a guard page at the bottom of the stack to prevent stack
-/// overflows. This would require unmapping the page in the page table. An access into this page
-/// would then cause an exception and the trap handler could then check if we're accessing a guard
-/// page and then kill? the task.
-///
-/// For now let's not worry too much about this. 4 pages should be enough to run the simple programs
-/// we're doing right now.
+/// Number of pages allocated as the stack for each task including a guard page to detect stack
+/// overflows.
 const TASK_STACK_PAGES: usize = 4;
 
 impl Scheduler {
@@ -244,6 +284,7 @@ impl Scheduler {
         Self {
             tasks: [const { None }; MAX_TASKS],
             current: None,
+            to_be_removed: None,
         }
     }
 
@@ -268,14 +309,6 @@ impl Scheduler {
         // physical address which is fine in this case, as we're in the kernel address space and all
         // available pages are idendity mapped.
         let phys_sp = phys_sp + TASK_STACK_PAGES * PAGE_SIZE;
-
-        log::info!(
-            "Task {name} has guard-page at {:#x}-{:#x} and stack at {:#x}-{:#x}",
-            guard_page,
-            guard_page + PAGE_SIZE - 1,
-            guard_page + PAGE_SIZE,
-            phys_sp
-        );
 
         if let Err(e) = page_table::unmap_identity_mapped_page(guard_page) {
             log::error!("Could not unmap guard page {e:?}");
@@ -306,6 +339,7 @@ impl Scheduler {
         tf.sstatus = sstatus;
         tf.sepc = sepc;
         tf.sp = phys_sp;
+        tf.guard_page = guard_page;
 
         let process = Process {
             task: exitable_task,
@@ -329,6 +363,22 @@ impl Scheduler {
         Ok(())
     }
 
+    fn maybe_cleanup_exited_task(&mut self) {
+        if let Some(to_be_removed) = self.to_be_removed.take() {
+            assert_ne!(
+                to_be_removed,
+                self.current.unwrap(),
+                "Can't remove the currently running process"
+            );
+
+            // take the task out of the task list in the scheduler
+            let task = core::mem::take(&mut self.tasks[to_be_removed.as_usize()]).unwrap();
+
+            // free it's allocated stack
+            page_frame_allocator::free_contiguous(task.frame.guard_page, TASK_STACK_PAGES);
+        }
+    }
+
     /// This is called from the interrupt handler which is capturing the timer events which drive
     /// this scheduler.
     ///
@@ -337,7 +387,8 @@ impl Scheduler {
     /// In order to do that we have to:
     /// 1. Stop execution of the previous task
     /// 2. Store all information so we can resume it
-    /// 3. Update old tasks state to `Sleep`
+    /// 3. Update old tasks state to [`target_state`] (this makes it possible to exit a task as
+    ///    well)
     /// 4. Figure out next task to run
     /// 5. Load all registers from the new task
     /// 6. Change it's state
@@ -345,7 +396,10 @@ impl Scheduler {
     fn next(
         &mut self,
         current_frame: *const TrapFrame,
+        target_state: Option<State>,
     ) -> Result<*const TrapFrame, SchedulerError> {
+        self.maybe_cleanup_exited_task();
+
         let current_pid = self
             .current
             .ok_or(SchedulerError::NoRunnableTask)?
@@ -356,7 +410,7 @@ impl Scheduler {
             .ok_or(SchedulerError::NoRunnableTask)?;
 
         proc.frame = unsafe { *current_frame };
-        proc.state = State::Runnable;
+        proc.state = target_state.unwrap_or(State::Runnable);
 
         // Search actual slot indices, wrapping once and considering the current task last.
         let next_runnable_pid = (1..=MAX_TASKS)
@@ -399,7 +453,7 @@ pub fn schedule(task: fn(), name: &'static str) {
 pub fn next(frame: *const TrapFrame) -> *const TrapFrame {
     let mut sched = SCHEDULER.lock();
 
-    match sched.next(frame) {
+    match sched.next(frame, None) {
         Ok(frame) => frame,
         Err(e) => {
             log::error!("{e:?}");
@@ -408,21 +462,39 @@ pub fn next(frame: *const TrapFrame) -> *const TrapFrame {
     }
 }
 
-pub fn print_state() {
-    let mut tasks = alloc::vec::Vec::new();
-    let mut current = None;
+pub struct ProcessInfo {
+    pid: Pid,
+    state: State,
+    name: &'static str,
+}
+
+impl core::fmt::Display for ProcessInfo {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            f,
+            "Task '{}' ({}) is {:?}",
+            self.name,
+            self.pid.as_usize(),
+            self.state
+        )
+    }
+}
+
+/// Returns the state of the Scheduler for use in the shell.
+pub fn state() -> alloc::vec::Vec<ProcessInfo> {
     interrupts::without_interrupts(|| {
         let sched = SCHEDULER.lock();
-        for task in &sched.tasks {
-            match task {
-                Some(task) => tasks.push(task.name),
-                None => tasks.push("<empty>"),
-            }
-        }
-        current = sched.current;
-    });
-
-    log::debug!("SchedulerState: cur={current:?} | {tasks:?}");
+        sched
+            .tasks
+            .iter()
+            .flatten()
+            .map(|proc| ProcessInfo {
+                pid: proc.pid,
+                state: proc.state,
+                name: proc.name,
+            })
+            .collect()
+    })
 }
 
 pub fn init() {

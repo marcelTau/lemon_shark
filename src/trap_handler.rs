@@ -1,8 +1,11 @@
 use core::arch::asm;
 use core::arch::naked_asm;
 
+use virtual_memory::PAGE_SIZE;
+
 use crate::kernel_layout::KernelLayout;
 use crate::plic;
+use crate::process;
 use crate::riscv;
 use crate::riscv::Scause;
 use crate::riscv::ScauseReason;
@@ -17,40 +20,41 @@ use crate::timer;
 #[derive(Clone, Copy)]
 #[repr(C)]
 pub struct TrapFrame {
-    pub kernel_sp: usize, // offset 0   — loaded first to switch stacks
-    pub ra: usize,        // offset 8
-    pub sp: usize,        // offset 16
-    pub gp: usize,        // offset 24
-    pub tp: usize,        // offset 32
-    pub t0: usize,        // offset 40
-    pub t1: usize,        // offset 48
-    pub t2: usize,        // offset 56
-    pub s0: usize,        // offset 64
-    pub s1: usize,        // offset 72
-    pub a0: usize,        // offset 80
-    pub a1: usize,        // offset 88
-    pub a2: usize,        // offset 96
-    pub a3: usize,        // offset 104
-    pub a4: usize,        // offset 112
-    pub a5: usize,        // offset 120
-    pub a6: usize,        // offset 128
-    pub a7: usize,        // offset 136
-    pub s2: usize,        // offset 144
-    pub s3: usize,        // offset 152
-    pub s4: usize,        // offset 160
-    pub s5: usize,        // offset 168
-    pub s6: usize,        // offset 176
-    pub s7: usize,        // offset 184
-    pub s8: usize,        // offset 192
-    pub s9: usize,        // offset 200
-    pub s10: usize,       // offset 208
-    pub s11: usize,       // offset 216
-    pub t3: usize,        // offset 224
-    pub t4: usize,        // offset 232
-    pub t5: usize,        // offset 240
-    pub t6: usize,        // offset 248
-    pub sepc: usize,      // offset 256
-    pub sstatus: usize,   // offset 264
+    pub kernel_sp: usize,  // offset 0   — loaded first to switch stacks
+    pub ra: usize,         // offset 8
+    pub sp: usize,         // offset 16
+    pub gp: usize,         // offset 24
+    pub tp: usize,         // offset 32
+    pub t0: usize,         // offset 40
+    pub t1: usize,         // offset 48
+    pub t2: usize,         // offset 56
+    pub s0: usize,         // offset 64
+    pub s1: usize,         // offset 72
+    pub a0: usize,         // offset 80
+    pub a1: usize,         // offset 88
+    pub a2: usize,         // offset 96
+    pub a3: usize,         // offset 104
+    pub a4: usize,         // offset 112
+    pub a5: usize,         // offset 120
+    pub a6: usize,         // offset 128
+    pub a7: usize,         // offset 136
+    pub s2: usize,         // offset 144
+    pub s3: usize,         // offset 152
+    pub s4: usize,         // offset 160
+    pub s5: usize,         // offset 168
+    pub s6: usize,         // offset 176
+    pub s7: usize,         // offset 184
+    pub s8: usize,         // offset 192
+    pub s9: usize,         // offset 200
+    pub s10: usize,        // offset 208
+    pub s11: usize,        // offset 216
+    pub t3: usize,         // offset 224
+    pub t4: usize,         // offset 232
+    pub t5: usize,         // offset 240
+    pub t6: usize,         // offset 248
+    pub sepc: usize,       // offset 256
+    pub sstatus: usize,    // offset 264
+    pub guard_page: usize, // offset 272
 }
 
 // Keep the Rust structure layout synchronized with the hardcoded offsets in
@@ -58,7 +62,7 @@ pub struct TrapFrame {
 // restore a register through the wrong field.
 const _: () = {
     assert!(core::mem::align_of::<TrapFrame>() == 8);
-    assert!(core::mem::size_of::<TrapFrame>() == 272);
+    assert!(core::mem::size_of::<TrapFrame>() == 280);
 
     assert!(core::mem::offset_of!(TrapFrame, kernel_sp) == 0);
     assert!(core::mem::offset_of!(TrapFrame, ra) == 8);
@@ -94,6 +98,7 @@ const _: () = {
     assert!(core::mem::offset_of!(TrapFrame, t6) == 248);
     assert!(core::mem::offset_of!(TrapFrame, sepc) == 256);
     assert!(core::mem::offset_of!(TrapFrame, sstatus) == 264);
+    assert!(core::mem::offset_of!(TrapFrame, guard_page) == 272);
 };
 
 impl TrapFrame {
@@ -133,6 +138,7 @@ impl TrapFrame {
             t6: 0,
             sepc: 0,
             sstatus: 0,
+            guard_page: 0,
         }
     }
 }
@@ -268,21 +274,36 @@ pub extern "C" fn trap_handler() -> ! {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn trap_handler_rust(frame: *mut TrapFrame) {
+extern "C" fn trap_handler_rust(tframe: *mut TrapFrame) {
     let scause = riscv::asm::scause();
     let stval = riscv::asm::stval();
-    let frame = unsafe { &mut *frame };
+    let frame = unsafe { &mut *tframe };
 
     match scause.reason() {
         ScauseReason::SupervisorTimerInterrupt => {
             let new_frame = timer::handle_interrupt(frame as *const TrapFrame);
-            unsafe { asm!("csrw sscratch, {}", in(reg) new_frame) };
+            riscv::asm::write_sscratch(new_frame as usize);
         }
         ScauseReason::SupervisorExternalInterrupt => {
             // External interrupts all are triggered by the PLIC right now. Not sure if there will
             // be other external interrupt sources later on but for now hand off to the PLIC
             // handler.
             plic::handle_external_interrupt();
+        }
+        ScauseReason::StoreAmoPageFault => {
+            // Page fault, i.e memory access to unmapped page. We need to
+            // determine if this is hitting the guard page of the running
+            // process or if this is a valid access and we need to map a page.
+            // Currenlty we don't support that but we still need to make sure
+            // this is hitting the guard page.
+            if stval >= frame.guard_page && stval < frame.guard_page + PAGE_SIZE {
+                // kill the process, I think it has to be marked as dead and then actually killed when another process
+                // is running as otherwise we return to a dead process here.
+                let new_frame = process::kill_current_and_schedule_next(frame);
+                riscv::asm::write_sscratch(new_frame as usize);
+            } else {
+                unreachable!("don't know yet but should be unreachable for now")
+            }
         }
         ScauseReason::Breakpoint => {
             let sepc = frame.sepc;

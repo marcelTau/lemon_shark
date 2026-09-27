@@ -55,6 +55,16 @@ fn proc2() {
     }
 }
 
+/// TODO(mt): does it make sense to store the initial stack with each task in the scheduler?
+fn stack_overflow() {
+    unsafe { exhaust_stack() }
+}
+
+#[unsafe(naked)]
+unsafe extern "C" fn exhaust_stack() {
+    core::arch::naked_asm!("2:", "addi sp, sp, -1024", "sd zero, 0(sp)", "j 2b");
+}
+
 #[unsafe(no_mangle)]
 extern "C" fn _start(_: usize, device_table_addr: usize) -> ! {
     let kernel_layout = unsafe { KernelLayout::from_labels() };
@@ -99,6 +109,7 @@ extern "C" fn _start(_: usize, device_table_addr: usize) -> ! {
         process::schedule(proc1, "proc1");
         process::schedule(proc2, "proc2");
         process::schedule(shell::shell, "shell");
+        process::schedule(stack_overflow, "stack_overflow");
         process::init();
         process::start()
     })

@@ -6,7 +6,7 @@ use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use crate::{riscv, uart};
+use crate::{process, riscv, uart};
 
 use crate::{print, println};
 
@@ -160,6 +160,7 @@ fn help() {
     println!("  flush               -- flush filesystem metadata to disk");
     println!("  history             -- show recently entered commands");
     println!("  allocate <n>        -- allocate memory of size n to test the kernel allocator");
+    println!("  tasks               -- show info about running tasks");
 }
 
 fn normalize_root_path(path: &str) -> String {
@@ -223,6 +224,7 @@ enum ShellCommand {
     Tree,
     Flush,
     History,
+    Tasks,
 }
 
 impl ShellCommand {
@@ -242,6 +244,7 @@ impl ShellCommand {
             "memory" => ShellCommand::MemoryDump,
             "uptime" => ShellCommand::Uptime,
             "sysinfo" => ShellCommand::SysInfo,
+            "tasks" => ShellCommand::Tasks,
             "tree" => ShellCommand::Tree,
             "history" => ShellCommand::History,
             "bench" => {
@@ -302,6 +305,13 @@ impl ShellCommand {
             ShellCommand::MemoryDump => memory(),
             ShellCommand::Bench { n, size } => benchmark_allocator(*n, *size),
             ShellCommand::Allocate { size } => shell_allocate(*size),
+            ShellCommand::Tasks => {
+                let state = process::state();
+                println!("Process Info:");
+                for proc in state {
+                    println!("\t{proc}");
+                }
+            }
             ShellCommand::Timer { secs } => {
                 crate::timer::new_time(Duration::from_secs(*secs as u64))
             }

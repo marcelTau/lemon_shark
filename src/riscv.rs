@@ -216,6 +216,13 @@ pub mod asm {
         value
     }
 
+    #[inline(always)]
+    pub fn write_sscratch(value: usize) {
+        unsafe {
+            core::arch::asm!("csrw sscratch, {}", in(reg) value, options(nomem, nostack));
+        }
+    }
+
     /// Disable supervisor interrupts and put this hart into an idle loop.
     pub fn halt() -> ! {
         unsafe {
