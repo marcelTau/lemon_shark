@@ -3,7 +3,7 @@ members = [".", "filesystem", "allocator", "mkfs", "bitmap", "virtual_memory"]
 resolver = "2"
 
 [package]
-name = "lemon_shark"
+name = "lemon-shark"
 version = "0.1.0"
 edition = "2024"
 
@@ -21,7 +21,7 @@ virtual_memory = { path = "virtual_memory" }
 log = { version = "0.4", default-features = false }
 
 [[bin]]
-name = "lemon_shark"
+name = "lemon-shark"
 test = false
 bench = false
 

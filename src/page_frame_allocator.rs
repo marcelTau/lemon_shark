@@ -33,6 +33,16 @@ impl FrameArena {
         Some(self.range.start() + index * PAGE_SIZE)
     }
 
+    fn alloc_contiguous(&mut self, pages: usize) -> Option<PhysAddr> {
+        let index = self.used.find_free_range(pages)?;
+
+        for i in 0..pages {
+            self.used.set(index + i as usize);
+        }
+
+        Some(self.range.start() + index * PAGE_SIZE)
+    }
+
     fn contains(&self, addr: PhysAddr) -> bool {
         self.range.start() <= addr && addr < self.range.end()
     }
@@ -105,6 +115,12 @@ impl PageFrameAllocator {
         self.arenas.iter_mut().find_map(FrameArena::alloc)
     }
 
+    fn alloc_contiguous(&mut self, pages: usize) -> Option<PhysAddr> {
+        self.arenas
+            .iter_mut()
+            .find_map(|a| a.alloc_contiguous(pages))
+    }
+
     fn free(&mut self, addr: PhysAddr) -> bool {
         let Some(arena) = self.arenas.iter_mut().find(|arena| arena.contains(addr)) else {
             log::error!("cannot free frame {addr:#x}; it is outside every managed arena");
@@ -114,6 +130,13 @@ impl PageFrameAllocator {
         arena.free(addr)
     }
 
+    fn free_contiguous(&mut self, start: PhysAddr, pages: usize) {
+        for offset in 0..pages {
+            let phys = start + offset * PAGE_SIZE;
+            self.free(phys);
+        }
+    }
+
     fn ranges(&self) -> Vec<PhysRange> {
         self.arenas.iter().map(|arena| arena.range).collect()
     }
@@ -121,6 +144,24 @@ impl PageFrameAllocator {
 
 pub fn alloc_frame() -> Option<PhysAddr> {
     PAGE_FRAME_ALLOCATOR.lock().as_mut().unwrap().alloc()
+}
+
+/// Returns the start address of the lowest page in the allocated range.
+pub fn alloc_contiguous(pages: usize) -> Option<PhysAddr> {
+    PAGE_FRAME_ALLOCATOR
+        .lock()
+        .as_mut()
+        .unwrap()
+        .alloc_contiguous(pages)
+}
+
+/// Frees `pages` or memory from `start`.
+pub fn free_contiguous(start: PhysAddr, pages: usize) {
+    PAGE_FRAME_ALLOCATOR
+        .lock()
+        .as_mut()
+        .unwrap()
+        .free_contiguous(start, pages);
 }
 
 pub fn free_frame(addr: PhysAddr) {

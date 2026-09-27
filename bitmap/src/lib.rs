@@ -100,6 +100,30 @@ impl Bitmap {
         None
     }
 
+    /// Find the first run of `n` consecutive free bits without changing the bitmap.
+    ///
+    /// Returns the starting index, or `None` if `n` is zero or no run fits.
+    /// Runs may cross word boundaries, but never include padding beyond `len`.
+    pub fn find_free_range(&self, n: usize) -> Option<usize> {
+        if n == 0 || n > self.len {
+            return None;
+        }
+
+        let mut free_count = 0;
+        for index in 0..self.len {
+            if self.is_set(index) {
+                free_count = 0;
+            } else {
+                free_count += 1;
+                if free_count == n {
+                    return Some(index + 1 - n);
+                }
+            }
+        }
+
+        None
+    }
+
     /// Returns an iterator over all set bits and unsets them.
     pub fn drain_ones(&mut self) -> impl Iterator<Item = usize> {
         self.words.iter_mut().enumerate().flat_map(|(idx, n)| {
@@ -275,6 +299,70 @@ mod tests {
         }
         bitmap.unset(37);
         assert_eq!(bitmap.find_free(), Some(37));
+    }
+
+    #[test]
+    fn find_free_range_rejects_empty_and_oversized_requests() {
+        for len in [0, 1, 31, 32, 33, 64] {
+            let bitmap = Bitmap::new(len);
+            assert_eq!(bitmap.find_free_range(0), None);
+            assert_eq!(bitmap.find_free_range(len + 1), None);
+            assert_eq!(bitmap.find_free_range(usize::MAX), None);
+            if len != 0 {
+                assert_eq!(bitmap.find_free_range(len), Some(0));
+            }
+        }
+    }
+
+    #[test]
+    fn find_free_range_returns_first_fit_without_reserving_it() {
+        let mut bitmap = Bitmap::new(16);
+        bitmap.set(0);
+        bitmap.set(3);
+        bitmap.set(8);
+        let before = bitmap.clone();
+
+        assert_eq!(bitmap.find_free_range(1), bitmap.find_free());
+        assert_eq!(bitmap.find_free_range(2), Some(1));
+        assert_eq!(bitmap.find_free_range(4), Some(4));
+        assert_eq!(bitmap.find_free_range(7), Some(9));
+        assert_eq!(bitmap, before);
+    }
+
+    #[test]
+    fn find_free_range_crosses_word_boundaries() {
+        let mut bitmap = Bitmap::from_words(128, vec![u32::MAX; 4]).unwrap();
+        for index in 30..100 {
+            bitmap.unset(index);
+        }
+
+        for n in [4, 32, 33, 64, 70] {
+            assert_eq!(bitmap.find_free_range(n), Some(30));
+        }
+        assert_eq!(bitmap.find_free_range(71), None);
+    }
+
+    #[test]
+    fn find_free_range_does_not_combine_separate_runs() {
+        let mut bitmap = Bitmap::new(64);
+        for index in (1..64).step_by(2) {
+            bitmap.set(index);
+        }
+        assert_eq!(bitmap.find_free_range(2), None);
+
+        let full = Bitmap::from_words(64, vec![u32::MAX; 2]).unwrap();
+        assert_eq!(full.find_free_range(1), None);
+    }
+
+    #[test]
+    fn find_free_range_excludes_padding_in_last_word() {
+        let mut bitmap = Bitmap::from_words(35, vec![u32::MAX; 2]).unwrap();
+        assert_eq!(bitmap.find_free_range(1), None);
+        for index in 31..35 {
+            bitmap.unset(index);
+        }
+        assert_eq!(bitmap.find_free_range(4), Some(31));
+        assert_eq!(bitmap.find_free_range(5), None);
     }
 
     #[test]

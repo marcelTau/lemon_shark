@@ -1,14 +1,14 @@
 #![no_std]
 #![no_main]
 
-use core::arch::global_asm;
+use core::{arch::global_asm, time::Duration};
 use lemon_shark::{
     ALLOCATOR, device_tree,
     filesystem::{self, KernelBlockDevice},
     interrupts,
     kernel_layout::KernelLayout,
-    logo, page_frame_allocator, page_table, plic, println, riscv, shell, timer, trap_handler, uart,
-    virtio2,
+    logo, page_frame_allocator, page_table, plic, println, process, riscv, shell, timer,
+    trap_handler, uart, virtio2,
 };
 
 // This is the section that we mapped first in the linker script `linker.ld`
@@ -24,6 +24,46 @@ global_asm!(
     "   la sp, _stack_top",
     "   call _start",
 );
+
+static COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+use core::sync::atomic::AtomicUsize;
+use core::sync::atomic::Ordering;
+
+fn proc1() {
+    let mut val = 0;
+    loop {
+        let res = COUNTER.compare_exchange(val, val + 1, Ordering::SeqCst, Ordering::SeqCst);
+
+        if let Ok(x) = res {
+            log::info!("proc1: {x}");
+            val += 2;
+        }
+    }
+}
+
+fn proc2() {
+    let mut val = 1;
+
+    loop {
+        let res = COUNTER.compare_exchange(val, val + 1, Ordering::SeqCst, Ordering::SeqCst);
+
+        if let Ok(x) = res {
+            log::info!("proc2: {x}");
+            val += 2;
+        }
+    }
+}
+
+/// TODO(mt): does it make sense to store the initial stack with each task in the scheduler?
+fn stack_overflow() {
+    unsafe { exhaust_stack() }
+}
+
+#[unsafe(naked)]
+unsafe extern "C" fn exhaust_stack() {
+    core::arch::naked_asm!("2:", "addi sp, sp, -1024", "sd zero, 0(sp)", "j 2b");
+}
 
 #[unsafe(no_mangle)]
 extern "C" fn _start(_: usize, device_table_addr: usize) -> ! {
@@ -58,13 +98,19 @@ extern "C" fn _start(_: usize, device_table_addr: usize) -> ! {
         timer::uptime_ms()
     );
 
-    // Program the first deadline before making timer interrupts observable.
-    // Global interrupts are enabled only after boot initialization is complete.
-    timer::new_time(1);
-
     uart::init();
 
+    // Program the first deadline before making timer interrupts observable.
+    // Global interrupts are enabled only after boot initialization is complete.
     interrupts::init();
 
-    shell::shell()
+    interrupts::without_interrupts(|| {
+        timer::new_time(Duration::from_millis(1));
+        process::schedule(proc1, "proc1");
+        process::schedule(proc2, "proc2");
+        process::schedule(shell::shell, "shell");
+        process::schedule(stack_overflow, "stack_overflow");
+        process::init();
+        process::start()
+    })
 }

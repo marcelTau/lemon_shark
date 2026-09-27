@@ -2,7 +2,7 @@
 
 pub mod physical_range;
 
-pub use physical_range::{PhysRange, PhysRangeError, normalize_ranges, usable_memory_ranges};
+pub use physical_range::{normalize_ranges, usable_memory_ranges, PhysRange, PhysRangeError};
 
 pub type PhysAddr = usize;
 pub const PAGE_SIZE: usize = 4096;
@@ -191,6 +191,10 @@ impl PageTable {
         &mut self.entries[idx]
     }
 
+    pub fn remove(&mut self, idx: usize) {
+        self.entries[idx] = PageTableEntry(0);
+    }
+
     /// Allocate and zero a new frame using the provided allocator, returning it as a PageTable.
     ///
     /// # Safety
@@ -243,12 +247,51 @@ impl PageTable {
 
         *l0_entry = PageTableEntry::new_leaf(phys, flags);
     }
+
+    /// Unmaps a virtual address.
+    ///
+    /// To remove a mapping, we need to walk the page tables until we reach the leaf-node which we
+    /// then can remove trom the level-0 table.
+    pub fn unmap(&mut self, virt: VirtAddr) -> Result<(), Error> {
+        let l2_entry = self.get_mut(virt.vpn(Level::L2));
+
+        if !l2_entry.is_valid() {
+            return Err(Error::InvalidUnmapRequest);
+        }
+
+        // TODO(mt): this assumes that we only have 4KiB pages and not have huge pages etc.
+        let l1_table = unsafe { &mut *(l2_entry.ppn() as *mut PageTable) };
+        let l1_entry = l1_table.get_mut(virt.vpn(Level::L1));
+
+        if !l1_entry.is_valid() {
+            return Err(Error::InvalidUnmapRequest);
+        }
+
+        let l0_table = unsafe { &mut *(l1_entry.ppn() as *mut PageTable) };
+        let l0_entry = l0_table.get_mut(virt.vpn(Level::L0));
+
+        // the `l0_entry` is going to be removed but it should still be valid at this point.
+        if !l0_entry.is_valid() {
+            return Err(Error::InvalidUnmapRequest);
+        }
+
+        l0_table.remove(virt.vpn(Level::L0));
+
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub enum Error {
+    /// A request to unmap a page was unsuccessful as one of the intermediate [`PageTableEntry`]s or
+    /// the final to-be-removed entry is invalid.
+    InvalidUnmapRequest,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::alloc::{Layout, alloc_zeroed};
+    use std::alloc::{alloc_zeroed, Layout};
 
     /// Allocate a single zeroed 4KB-aligned frame from the host allocator.
     fn alloc_test_frame() -> PhysAddr {

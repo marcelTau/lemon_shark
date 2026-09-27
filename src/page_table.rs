@@ -13,8 +13,20 @@ pub(crate) fn new_identity_map(phys: PhysAddr) {
     let alloc = || page_frame_allocator::alloc_frame().unwrap();
     unsafe {
         (*&raw mut KERNEL_PAGE_TABLE).map(VirtAddr(phys), phys, flags, alloc);
-        asm!("sfence.vma");
     }
+    riscv::asm::flush_tlb();
+}
+
+/// This function unmaps a page from virtual memory in order to create guard pages to avoid stack
+/// overflows. Since we're only working in the kernel address space right now and all kernel pages
+/// are identity mapped, we can take a [`PhysAddr`] here.
+pub fn unmap_identity_mapped_page(phys: PhysAddr) -> Result<(), virtual_memory::Error> {
+    unsafe {
+        (*&raw mut KERNEL_PAGE_TABLE).unmap(VirtAddr(phys))?;
+    }
+    riscv::asm::flush_tlb();
+
+    Ok(())
 }
 
 /// This initializes the kernel page table, identity mapping all kernel pages and pages used for

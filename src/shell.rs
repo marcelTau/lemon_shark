@@ -1,11 +1,12 @@
 extern crate alloc;
 use core::str::FromStr;
+use core::time::Duration;
 
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use crate::{riscv, uart};
+use crate::{process, riscv, uart};
 
 use crate::{print, println};
 
@@ -53,7 +54,7 @@ const ASCII_DELETE: u8 = 127;
 fn read_line_and_display() -> String {
     let mut cmd = String::new();
 
-    print!("hai> ");
+    print!("reef $ ");
     loop {
         let byte = uart::read_byte_blocking();
 
@@ -159,6 +160,7 @@ fn help() {
     println!("  flush               -- flush filesystem metadata to disk");
     println!("  history             -- show recently entered commands");
     println!("  allocate <n>        -- allocate memory of size n to test the kernel allocator");
+    println!("  tasks               -- show info about running tasks");
 }
 
 fn normalize_root_path(path: &str) -> String {
@@ -222,6 +224,7 @@ enum ShellCommand {
     Tree,
     Flush,
     History,
+    Tasks,
 }
 
 impl ShellCommand {
@@ -241,6 +244,7 @@ impl ShellCommand {
             "memory" => ShellCommand::MemoryDump,
             "uptime" => ShellCommand::Uptime,
             "sysinfo" => ShellCommand::SysInfo,
+            "tasks" => ShellCommand::Tasks,
             "tree" => ShellCommand::Tree,
             "history" => ShellCommand::History,
             "bench" => {
@@ -301,7 +305,16 @@ impl ShellCommand {
             ShellCommand::MemoryDump => memory(),
             ShellCommand::Bench { n, size } => benchmark_allocator(*n, *size),
             ShellCommand::Allocate { size } => shell_allocate(*size),
-            ShellCommand::Timer { secs } => crate::timer::new_time(*secs),
+            ShellCommand::Tasks => {
+                let state = process::state();
+                println!("Process Info:");
+                for proc in state {
+                    println!("\t{proc}");
+                }
+            }
+            ShellCommand::Timer { secs } => {
+                crate::timer::new_time(Duration::from_secs(*secs as u64))
+            }
             ShellCommand::Ls { path: dir } => {
                 if let Err(e) = crate::filesystem::api::dump_dir(dir) {
                     println!("ls failed: {e:?}");
@@ -330,8 +343,15 @@ impl ShellCommand {
                 Err(e) => println!("cat failed: {e:?}"),
             },
             ShellCommand::Uptime => {
-                let time = crate::timer::uptime();
-                println!("Currently running for {time}s");
+                let uptime_ms = crate::timer::uptime_ms();
+
+                // Use integer formatting: floating-point initialization and context
+                // saving/restoring are not set up in the kernel yet.
+                let secs = uptime_ms / 1000;
+                let millis = uptime_ms % 1000;
+
+                let irqs = crate::timer::interrupt_count();
+                println!("Currently running for {secs}.{millis:03}s with {irqs} interrupts");
             }
             ShellCommand::Write { path, text } => {
                 if let Err(e) = crate::filesystem::api::write_to_file(path, text.clone()) {
@@ -351,7 +371,7 @@ impl ShellCommand {
 
 /// This spawns a simple shell which let's the user input some commands
 /// and reads from the UART and outputs something based on the command.
-pub fn shell() -> ! {
+pub fn shell() {
     let mut history = CommandHistory::new();
 
     loop {

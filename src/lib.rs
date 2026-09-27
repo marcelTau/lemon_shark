@@ -18,6 +18,7 @@ pub mod page_frame_allocator;
 pub mod page_table;
 pub mod plic;
 pub mod println;
+pub mod process;
 pub mod ramdisk;
 pub mod ring_buffer;
 pub mod riscv;
