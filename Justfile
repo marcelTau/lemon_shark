@@ -50,7 +50,7 @@ run *extra_args:
 		-chardev file,id=log,path=kernel.log
 		-device virtio-serial-device
 		-device virtconsole,chardev=log
-		-kernel ./target/riscv64gc-unknown-none-elf/debug/lemon_shark
+		-kernel ./target/riscv64gc-unknown-none-elf/debug/lemon-shark
 	)
 	cargo build
 	printf 'Running:'
