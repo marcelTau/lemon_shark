@@ -21,8 +21,12 @@ cargo run -p mkfs --target x86_64-unknown-linux-gnu --
 
 This creates `lemonfs.img`, which QEMU exposes to the kernel as its VirtIO block
 device. Running the kernel does not rebuild the image, so changes made from the
-kernel remain until `mkfs` is run again. `make fs` is a convenience alias for
-the command above.
+kernel remain until `mkfs` is run again. `just fs` is a convenience alias for
+the command above and forwards additional arguments directly:
+
+```bash
+just fs --source rootfs --output lemonfs.img --blocks 32768
+```
 
 The defaults can be overridden with named options:
 
@@ -44,7 +48,7 @@ permissions, ownership, and timestamps are not represented by LemonFS.
 After creating the image, boot the kernel with:
 
 ```bash
-make run
+just run
 ```
 
 The shell's `tree`, `ls`, and `cat` commands can be used to inspect imported
