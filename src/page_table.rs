@@ -1,21 +1,21 @@
 use crate::riscv::{self, Asid, Satp, SatpMode};
 use core::arch::asm;
 
-use virtual_memory::{PAGE_SIZE, PageTable, PhysAddr, PhysRange, VirtAddr, pte_flags};
+use virtual_memory::{pte_flags, PageTable, PhysAddr, PhysRange, VirtAddr, PAGE_SIZE};
 
 use crate::{device_tree, kernel_layout::KernelLayout, page_frame_allocator};
 
 static mut KERNEL_PAGE_TABLE: PageTable = PageTable::new();
 
 /// Identity-maps a physical page into the kernel page table (virtual == physical).
-pub(crate) fn new_identity_map(phys: PhysAddr) {
-    let flags = pte_flags::READ | pte_flags::WRITE;
-    let alloc = || page_frame_allocator::alloc_frame().unwrap();
-    unsafe {
-        (*&raw mut KERNEL_PAGE_TABLE).map(VirtAddr(phys), phys, flags, alloc);
-    }
-    riscv::asm::flush_tlb();
-}
+// pub(crate) fn new_identity_map(phys: PhysAddr) -> Result<(), Error> {
+//     let flags = pte_flags::READ | pte_flags::WRITE;
+//     let alloc = || page_frame_allocator::alloc_frame();
+//     unsafe {
+//         (*&raw mut KERNEL_PAGE_TABLE).map(VirtAddr(phys), phys, flags, alloc)?;
+//     }
+//     riscv::asm::flush_tlb();
+// }
 
 /// This function unmaps a page from virtual memory in order to create guard pages to avoid stack
 /// overflows. Since we're only working in the kernel address space right now and all kernel pages
@@ -41,27 +41,28 @@ pub fn init(kernel_layout: KernelLayout) {
 
     let upper_half_offset = 0xFFFF_FFFF_0000_0000_usize;
 
-    let alloc = || page_frame_allocator::alloc_frame().unwrap();
+    let alloc = || page_frame_allocator::alloc_frame();
 
     for page in (kernel_start..kernel_end).step_by(PAGE_SIZE) {
         let flags = pte_flags::READ | pte_flags::WRITE | pte_flags::EXECUTE;
         unsafe {
             // NOTE: Funky syntax here because rust doesn't allow taking a mutable reference to a
             // static. This is a workaround like `addr_of_mut!()` which is getting deprecated.
-            (*&raw mut KERNEL_PAGE_TABLE).map(VirtAddr(page), page, flags, alloc);
-            (*&raw mut KERNEL_PAGE_TABLE).map(
-                VirtAddr(upper_half_offset + page),
-                page,
-                flags,
-                alloc,
-            );
+            (*&raw mut KERNEL_PAGE_TABLE)
+                .map(VirtAddr(page), page, flags, alloc)
+                .unwrap();
+            (*&raw mut KERNEL_PAGE_TABLE)
+                .map(VirtAddr(upper_half_offset + page), page, flags, alloc)
+                .unwrap();
         }
     }
 
     let id_map_region = |range: PhysRange, flags| {
         for page in range.range().step_by(PAGE_SIZE) {
             unsafe {
-                (*&raw mut KERNEL_PAGE_TABLE).map(VirtAddr(page), page, flags, alloc);
+                (*&raw mut KERNEL_PAGE_TABLE)
+                    .map(VirtAddr(page), page, flags, alloc)
+                    .unwrap();
             }
         }
     };

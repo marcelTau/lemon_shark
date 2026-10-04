@@ -200,15 +200,15 @@ impl PageTable {
     /// # Safety
     ///
     /// `alloc` must return a valid, writable, 4KB-aligned physical address.
-    unsafe fn new_table<F>(alloc: &F) -> PhysAddr
+    unsafe fn new_table<F>(alloc: &F) -> Option<PhysAddr>
     where
-        F: Fn() -> PhysAddr,
+        F: Fn() -> Option<PhysAddr>,
     {
-        let frame = alloc();
+        let frame = alloc()?;
         unsafe {
             (frame as *mut PageTable).write_bytes(0, 1);
         }
-        frame
+        Some(frame)
     }
 
     /// Map `virt` to `phys` with the given flags.
@@ -219,14 +219,20 @@ impl PageTable {
     ///
     /// `alloc` must return valid 4KB-aligned physical frames. All physical addresses must
     /// be accessible (identity-mapped or otherwise reachable) at the time of the call.
-    pub unsafe fn map<F>(&mut self, virt: VirtAddr, phys: PhysAddr, flags: usize, alloc: F)
+    pub unsafe fn map<F>(
+        &mut self,
+        virt: VirtAddr,
+        phys: PhysAddr,
+        flags: usize,
+        alloc: F,
+    ) -> Result<(), Error>
     where
-        F: Fn() -> PhysAddr,
+        F: Fn() -> Option<PhysAddr>,
     {
         let l2_entry = self.get_mut(virt.vpn(Level::L2));
 
         if !l2_entry.is_valid() {
-            let frame = unsafe { Self::new_table(&alloc) };
+            let frame = unsafe { Self::new_table(&alloc).ok_or(Error::FrameAllocatorOutOfMemory)? };
             *l2_entry = PageTableEntry::new_branch(frame);
         }
 
@@ -235,7 +241,7 @@ impl PageTable {
         let l1_entry = l1_table.get_mut(virt.vpn(Level::L1));
 
         if !l1_entry.is_valid() {
-            let frame = unsafe { Self::new_table(&alloc) };
+            let frame = unsafe { Self::new_table(&alloc).ok_or(Error::FrameAllocatorOutOfMemory)? };
             *l1_entry = PageTableEntry::new_branch(frame);
         }
 
@@ -246,6 +252,8 @@ impl PageTable {
         assert!(!l0_entry.is_valid());
 
         *l0_entry = PageTableEntry::new_leaf(phys, flags);
+
+        Ok(())
     }
 
     /// Unmaps a virtual address.
@@ -286,6 +294,9 @@ pub enum Error {
     /// A request to unmap a page was unsuccessful as one of the intermediate [`PageTableEntry`]s or
     /// the final to-be-removed entry is invalid.
     InvalidUnmapRequest,
+
+    /// Could not allocate a new frame when mapping a page.
+    FrameAllocatorOutOfMemory,
 }
 
 #[cfg(test)]

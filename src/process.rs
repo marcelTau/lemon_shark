@@ -1,5 +1,5 @@
 extern crate alloc;
-use crate::trap_handler::TrapFrame;
+use crate::{scheduler, trap_handler::TrapFrame};
 
 /// The Process ID
 #[derive(Copy, Clone, Default, Debug, PartialEq, Eq)]
@@ -76,7 +76,8 @@ impl ExitableTask {
     pub unsafe extern "C" fn run_with_exit(ptr: *const Self) {
         let task = unsafe { (*ptr).task };
         task();
-        unsafe { core::arch::asm!("li a0, 0", "li a7, 93", "ecall") }
+        panic!("We don't support exiting tasks right now!");
+        // unsafe { core::arch::asm!("li a0, 0", "li a7, 93", "ecall") }
     }
 }
 
