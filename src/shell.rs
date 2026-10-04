@@ -308,7 +308,10 @@ impl ShellCommand {
             ShellCommand::Tasks => {
                 let state = scheduler::state();
                 println!("Process Info:");
-                for proc in state {
+                for proc in state.live {
+                    println!("\t{proc}");
+                }
+                for proc in state.dead {
                     println!("\t{proc}");
                 }
             }

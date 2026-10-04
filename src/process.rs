@@ -76,7 +76,24 @@ impl ExitableTask {
     pub unsafe extern "C" fn run_with_exit(ptr: *const Self) {
         let task = unsafe { (*ptr).task };
         task();
-        todo!()
+        unsafe { core::arch::asm!("li a0, 0", "li a7, 93", "ecall") }
+    }
+}
+
+#[derive(Clone)]
+pub struct DeadProcessInfo {
+    pub pid: Pid,
+    pub exit_code: usize,
+}
+
+impl core::fmt::Display for DeadProcessInfo {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            f,
+            "Task {} exited with code {}",
+            self.pid.as_usize(),
+            self.exit_code
+        )
     }
 }
 

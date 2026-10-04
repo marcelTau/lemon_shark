@@ -5,7 +5,7 @@ use crate::{print, println, ramdisk};
 use alloc::string::String;
 use filesystem::{BlockDevice, Filesystem};
 
-pub use filesystem::{BLOCK_SIZE, BlockIndex, Error, INodeIndex};
+pub use filesystem::{BlockIndex, Error, INodeIndex, BLOCK_SIZE};
 
 /// The concrete block device used by the kernel, wrapping either the in-memory
 /// ramdisk or the VirtIO persistent storage.

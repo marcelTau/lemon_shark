@@ -52,6 +52,10 @@ fn proc2() {
             log::info!("proc2: {x}");
             val += 2;
         }
+
+        if val > 100 {
+            return;
+        }
     }
 }
 

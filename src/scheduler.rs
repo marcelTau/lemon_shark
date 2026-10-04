@@ -104,9 +104,11 @@
 
 extern crate alloc;
 
+use alloc::vec::Vec;
+
 use virtual_memory::PAGE_SIZE;
 
-use crate::process::{ExitableTask, ProcessInfo};
+use crate::process::{DeadProcessInfo, ExitableTask, ProcessInfo};
 use crate::riscv::{self, sstatus};
 use crate::{
     interrupts,
@@ -138,6 +140,8 @@ struct Scheduler {
 
     /// The [`Pid`] to be removed in the next `.next()` call.
     to_be_removed: Option<Pid>,
+
+    proc_history: alloc::vec::Vec<DeadProcessInfo>,
 }
 
 #[derive(Debug)]
@@ -166,6 +170,7 @@ impl Scheduler {
             tasks: [const { None }; MAX_TASKS],
             current: None,
             to_be_removed: None,
+            proc_history: Vec::new(),
         }
     }
 
@@ -374,11 +379,18 @@ pub fn next(frame: *const TrapFrame) -> *const TrapFrame {
 /// and execution moves on to the next task.
 ///
 /// Since this is called from the trap handler we do not need to worry about interrupts.
-pub fn kill_current_and_schedule_next(frame: *const TrapFrame) -> *const TrapFrame {
+pub fn kill_current_and_schedule_next(
+    frame: *const TrapFrame,
+    exit_code: usize,
+) -> *const TrapFrame {
     let mut sched = SCHEDULER.lock();
     let current_pid = sched.current.unwrap();
     let new_frame = sched.next(frame, Some(State::Exited)).unwrap();
     sched.to_be_removed = Some(current_pid);
+    sched.proc_history.push(DeadProcessInfo {
+        pid: current_pid,
+        exit_code,
+    });
 
     new_frame
 
@@ -397,11 +409,16 @@ pub fn init() {
     })
 }
 
+pub struct SchedulerState {
+    pub live: alloc::vec::Vec<ProcessInfo>,
+    pub dead: alloc::vec::Vec<DeadProcessInfo>,
+}
+
 /// Returns the state of the Scheduler for use in the shell.
-pub fn state() -> alloc::vec::Vec<ProcessInfo> {
+pub fn state() -> SchedulerState {
     interrupts::without_interrupts(|| {
         let sched = SCHEDULER.lock();
-        sched
+        let live = sched
             .tasks
             .iter()
             .flatten()
@@ -410,7 +427,11 @@ pub fn state() -> alloc::vec::Vec<ProcessInfo> {
                 state: proc.state,
                 name: proc.name,
             })
-            .collect()
+            .collect();
+
+        let dead = sched.proc_history.clone();
+
+        SchedulerState { live, dead }
     })
 }
 
