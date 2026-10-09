@@ -2,7 +2,7 @@
 
 pub mod physical_range;
 
-pub use physical_range::{normalize_ranges, usable_memory_ranges, PhysRange, PhysRangeError};
+pub use physical_range::{PhysRange, PhysRangeError, normalize_ranges, usable_memory_ranges};
 
 pub type PhysAddr = usize;
 pub const PAGE_SIZE: usize = 4096;
@@ -302,12 +302,14 @@ pub enum Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::alloc::{alloc_zeroed, Layout};
+    use std::alloc::{Layout, alloc_zeroed};
 
     /// Allocate a single zeroed 4KB-aligned frame from the host allocator.
     fn alloc_test_frame() -> PhysAddr {
         let layout = Layout::from_size_align(PAGE_SIZE, PAGE_SIZE).unwrap();
-        unsafe { alloc_zeroed(layout) as PhysAddr }
+        let frame = unsafe { alloc_zeroed(layout) };
+        assert!(!frame.is_null(), "failed to allocate a test frame");
+        frame as PhysAddr
     }
 
     #[test]
@@ -387,8 +389,9 @@ mod tests {
                 VirtAddr::from_parts(1, 2, 3, 0x100),
                 phys,
                 pte_flags::READ | pte_flags::WRITE,
-                alloc_test_frame,
-            );
+                || Some(alloc_test_frame()),
+            )
+            .unwrap();
         }
 
         // L2 entry at index 1 should be a valid branch
@@ -422,7 +425,7 @@ mod tests {
         let alloc_count = std::cell::RefCell::new(0usize);
         let counting_alloc = || {
             *alloc_count.borrow_mut() += 1;
-            alloc_test_frame()
+            Some(alloc_test_frame())
         };
 
         unsafe {
@@ -431,13 +434,15 @@ mod tests {
                 phys_a,
                 pte_flags::READ,
                 &counting_alloc,
-            );
+            )
+            .unwrap();
             root.map(
                 VirtAddr::from_parts(1, 2, 4, 0),
                 phys_b,
                 pte_flags::READ,
                 &counting_alloc,
-            );
+            )
+            .unwrap();
         }
 
         // First map allocates 2 intermediate tables (L1 and L0 level).
@@ -452,6 +457,19 @@ mod tests {
 
         assert_eq!(l0_table.get_mut(3).ppn(), phys_a);
         assert_eq!(l0_table.get_mut(4).ppn(), phys_b);
+    }
+
+    #[test]
+    fn map_reports_frame_allocator_out_of_memory() {
+        let mut root = PageTable::new();
+        let result = unsafe {
+            root.map(VirtAddr::from_parts(1, 2, 3, 0), 0, pte_flags::READ, || {
+                None
+            })
+        };
+
+        assert!(matches!(result, Err(Error::FrameAllocatorOutOfMemory)));
+        assert!(!root.get_mut(1).is_valid());
     }
 }
 

@@ -26,7 +26,8 @@ use crate::inode::{INODE_BLOCKS, INode};
 use crate::inode_cache::INodeCache;
 use crate::layout::Layout;
 use crate::{BlockIndex, INodeIndex};
-use alloc::string::{String, ToString};
+use alloc::borrow::Cow;
+use alloc::string::String;
 use alloc::vec::Vec;
 use bitmap::Bitmap;
 use core::mem;
@@ -380,7 +381,7 @@ pub struct Filesystem<D> {
     layout: Layout,
 }
 
-fn entry_display(inode: &INode, name: String) -> (char, String, String) {
+fn entry_display<'a>(inode: &INode, name: &'a str) -> (char, String, alloc::borrow::Cow<'a, str>) {
     let type_char = if inode.is_directory() { 'd' } else { 'f' };
     let size_str = if inode.is_directory() {
         "-".into()
@@ -388,9 +389,9 @@ fn entry_display(inode: &INode, name: String) -> (char, String, String) {
         alloc::format!("{}", inode.size())
     };
     let display_name = if inode.is_directory() {
-        alloc::format!("{name}/")
+        Cow::Owned(alloc::format!("{name}/"))
     } else {
-        name
+        Cow::Borrowed(name)
     };
     (type_char, size_str, display_name)
 }
@@ -512,12 +513,11 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
         Some(free)
     }
 
-    fn byte_compare(s: &str, entry: &str) -> bool {
-        if entry.starts_with('/') {
-            s == &entry[1..]
-        } else {
-            s == entry
-        }
+    fn byte_compare(s: &str, entry: &[u8]) -> bool {
+        let end = entry.iter().position(|&b| b == 0).unwrap_or(entry.len());
+        let name = &entry[..end];
+        let name = name.strip_prefix(b"/").unwrap_or(name);
+        s.as_bytes() == name
     }
 
     /// Resovles a `Path` by walking from the root until the leaf is found.
@@ -540,7 +540,7 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
 
             let next = dir_entries
                 .iter()
-                .find(|e| Self::byte_compare(part, &e.name()))
+                .find(|e| Self::byte_compare(part, e.name_bytes()))
                 .ok_or(Error::NotFound)?;
 
             // TODO(mt): this check doens't allow files and directories to have the same name. That is fine for now!
@@ -555,7 +555,7 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
 
         let file = dir_entries
             .iter()
-            .find(|e| Self::byte_compare(basename, &e.name()))
+            .find(|e| Self::byte_compare(basename, e.name_bytes()))
             .ok_or(Error::NotFound)?;
 
         Ok(ResolvedPath {
@@ -595,7 +595,7 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
         let num_parent_entries = unsafe { parent_inode.current_dir_entries() };
 
         let found = DirEntryReader::new(self.block_device_mut(), parent_inode)
-            .find(|entry| entry.entry.name() == to_remove)
+            .find(|entry| Self::byte_compare(to_remove, entry.entry.name_bytes()))
             .ok_or(Error::NotFound)?;
 
         let last_block_slot = (num_parent_entries - 1) / DIR_ENTRY_PER_BLOCK;
@@ -681,7 +681,7 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
             // Find the entry for `part`.
             let next = dir_entries
                 .iter()
-                .find(|e| Self::byte_compare(part, &e.name()))
+                .find(|e| Self::byte_compare(part, e.name_bytes()))
                 .ok_or(Error::NotFound)?;
 
             // If the INode that matches the `part` name is not a directory
@@ -707,7 +707,7 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
         if self
             .read_dir_entry(current)
             .iter()
-            .any(|e| Self::byte_compare(new_entry_name, &e.name()))
+            .any(|e| Self::byte_compare(new_entry_name, e.name_bytes()))
         {
             return Err(Error::EntryExists);
         }
@@ -723,14 +723,14 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
 
         // Create a `DirEntry` with `name` for the new directory and link it
         // to root.
-        let new_directory = DirEntry::new(new_entry_name.to_string(), inode_index);
+        let new_directory = DirEntry::new(new_entry_name, inode_index);
 
         self.write_dir_entry(new_directory, current).unwrap();
 
         // Create the "." & ".." directories for a new directory.
         if entry_type == Entry::Directory {
-            let this = DirEntry::new(String::from("."), inode_index);
-            let parent = DirEntry::new(String::from(".."), current);
+            let this = DirEntry::new(".", inode_index);
+            let parent = DirEntry::new("..", current);
             self.write_dir_entry(this, inode_index).unwrap();
             self.write_dir_entry(parent, inode_index).unwrap();
         }
@@ -821,8 +821,8 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
         log::error!("Root inode index: {root_inode_index:?}");
 
         // Create the default directories in the root directory.
-        let this = DirEntry::new(String::from("."), root_inode_index);
-        let this_too = DirEntry::new(String::from(".."), root_inode_index);
+        let this = DirEntry::new(".", root_inode_index);
+        let this_too = DirEntry::new("..", root_inode_index);
 
         self.write_dir_entry(this, root_inode_index).unwrap();
         self.write_dir_entry(this_too, root_inode_index).unwrap();
@@ -948,7 +948,7 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
         let _ = writeln!(out, "  ----  -----  ---------  ----");
 
         for entry in entries.iter() {
-            let name = entry.name();
+            let name = entry.name_str();
             if name.is_empty() {
                 continue;
             }
@@ -977,7 +977,7 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
         ) {
             let connector = if is_last { "└── " } else { "├── " };
             let entry_inode = *fs.inode_cache.get(entry.inode(), &mut fs.block_device);
-            let (type_char, size_str, name) = entry_display(&entry_inode, entry.name());
+            let (type_char, size_str, name) = entry_display(&entry_inode, entry.name_str());
             let _ = writeln!(
                 out,
                 "{}{}{}  {:>9}  {}",
@@ -990,7 +990,7 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
                 let children: Vec<DirEntry> = fs
                     .read_dir_entry(entry.inode())
                     .into_iter()
-                    .filter(|e| !e.name().starts_with('.'))
+                    .filter(|e| !e.name_bytes().starts_with(b"."))
                     .collect();
                 let count = children.len();
                 for (i, child) in children.iter().enumerate() {
@@ -1003,7 +1003,7 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
         let root_entries: Vec<DirEntry> = self
             .read_dir_entry(INodeIndex::new(0))
             .into_iter()
-            .filter(|e| !e.name().starts_with('.'))
+            .filter(|e| !e.name_bytes().starts_with(b"."))
             .collect();
         let count = root_entries.len();
         for (i, entry) in root_entries.iter().enumerate() {
@@ -1132,6 +1132,7 @@ where
 mod tests {
     use super::*;
     use crate::layout::DataBlockIndex;
+    use alloc::string::ToString;
     use std::cell::RefCell;
     use std::rc::Rc;
 
@@ -1235,7 +1236,7 @@ mod tests {
     ) -> Option<INodeIndex> {
         fs.read_dir_entry(dir_inode)
             .into_iter()
-            .find(|entry| entry.name() == name)
+            .find(|entry| entry.name_str() == name)
             .map(|entry| entry.inode())
     }
 
@@ -1265,8 +1266,8 @@ mod tests {
         let entries = fs.read_dir_entry(INodeIndex::new(0));
         assert_eq!(entries.len(), 2);
 
-        let dot = entries.iter().find(|e| e.name() == ".").unwrap();
-        let dotdot = entries.iter().find(|e| e.name() == "..").unwrap();
+        let dot = entries.iter().find(|e| e.name_str() == ".").unwrap();
+        let dotdot = entries.iter().find(|e| e.name_str() == "..").unwrap();
 
         assert_eq!(dot.inode().inner(), 0);
         assert_eq!(dotdot.inode().inner(), 0);
@@ -1476,8 +1477,8 @@ mod tests {
         let a_entries = fs.read_dir_entry(a);
         let b_entries = fs.read_dir_entry(b);
 
-        let a_dot = a_entries.iter().find(|e| e.name() == ".").unwrap();
-        let b_dot = b_entries.iter().find(|e| e.name() == ".").unwrap();
+        let a_dot = a_entries.iter().find(|e| e.name_str() == ".").unwrap();
+        let b_dot = b_entries.iter().find(|e| e.name_str() == ".").unwrap();
 
         assert_eq!(a_dot.inode().inner(), a.inner());
         assert_eq!(b_dot.inode().inner(), b.inner());
@@ -1491,7 +1492,7 @@ mod tests {
         let child = fs.mkdir("/a/b").unwrap();
         let child_entries = fs.read_dir_entry(child);
 
-        let dotdot = child_entries.iter().find(|e| e.name() == "..").unwrap();
+        let dotdot = child_entries.iter().find(|e| e.name_str() == "..").unwrap();
 
         assert_eq!(dotdot.inode().inner(), parent.inner());
     }
@@ -1557,7 +1558,7 @@ mod tests {
         let names: Vec<_> = fs
             .read_dir_entry(INodeIndex::new(0))
             .into_iter()
-            .map(|entry| entry.name())
+            .map(|entry| entry.name_str().to_string())
             .collect();
 
         assert!(names.iter().any(|entry| entry == name));
@@ -1881,7 +1882,7 @@ mod tests {
         let names: Vec<_> = fs
             .read_dir_entry(INodeIndex::new(0))
             .into_iter()
-            .map(|e| e.name())
+            .map(|e| e.name_str().to_string())
             .collect();
         assert!(!names.contains(&"file.txt".to_string()));
     }
@@ -1903,7 +1904,7 @@ mod tests {
         let names: Vec<_> = fs
             .read_dir_entry(b_inode)
             .into_iter()
-            .map(|e| e.name())
+            .map(|e| e.name_str().to_string())
             .collect();
         assert!(!names.contains(&"file.txt".to_string()));
     }
@@ -1930,7 +1931,7 @@ mod tests {
         let names: Vec<_> = fs
             .read_dir_entry(INodeIndex::root())
             .into_iter()
-            .map(|entry| entry.name())
+            .map(|entry| entry.name_str().to_string())
             .collect();
 
         assert!(
@@ -2003,7 +2004,7 @@ mod tests {
         let names: Vec<_> = fs
             .read_dir_entry(INodeIndex::new(0))
             .into_iter()
-            .map(|e| e.name())
+            .map(|e| e.name_str().to_string())
             .collect();
         assert!(!names.contains(&"gone.txt".to_string()));
     }
@@ -2084,7 +2085,7 @@ mod tests {
         let names: Vec<_> = fs
             .read_dir_entry(INodeIndex::new(0))
             .into_iter()
-            .map(|e| e.name())
+            .map(|e| e.name_str().to_string())
             .collect();
         assert!(
             names.contains(&"b".to_string()),

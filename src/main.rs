@@ -3,12 +3,12 @@
 
 use core::{arch::global_asm, time::Duration};
 use lemon_shark::{
-    device_tree,
+    ALLOCATOR, device_tree,
     filesystem::{self, KernelBlockDevice},
     interrupts,
     kernel_layout::KernelLayout,
     logo, page_frame_allocator, page_table, plic, println, riscv, scheduler, shell, timer,
-    trap_handler, uart, virtio2, ALLOCATOR,
+    trap_handler, uart, virtio2,
 };
 
 // This is the section that we mapped first in the linker script `linker.ld`

@@ -3,9 +3,6 @@ use crate::{
     bytereader::{ByteReader, ByteWriter, DiskFormat},
 };
 
-extern crate alloc;
-use alloc::string::String;
-
 /// The `DirEntry` contains metadata about an entry in a directory such as a
 /// file or another directory which is pointed to by the `INodeIndex`.
 /// NOTE: BLOCK_SIZE must always be a multiple of `DirEntry` to ensure tighly fitted entries.
@@ -24,14 +21,14 @@ impl core::fmt::Debug for DirEntry {
         write!(
             f,
             "DirEntry name=\"{}\" inode={:?}",
-            self.name(),
+            self.name_str(),
             self.inode
         )
     }
 }
 
 impl DirEntry {
-    pub(crate) fn new(name_string: String, inode: INodeIndex) -> Self {
+    pub(crate) fn new(name_string: &str, inode: INodeIndex) -> Self {
         let mut name = [0u8; 24];
         let bytes = name_string.as_bytes();
         let len = bytes.len().min(24);
@@ -41,9 +38,18 @@ impl DirEntry {
         DirEntry { name, inode }
     }
 
-    pub(crate) fn name(&self) -> String {
-        let len = self.name.iter().filter(|&&b| b != 0).count();
-        String::from_utf8(self.name[..len].to_vec()).unwrap_or_default()
+    /// Borrow the unpadded name for display, using an empty name for invalid UTF-8.
+    pub(crate) fn name_str(&self) -> &str {
+        let len = self
+            .name
+            .iter()
+            .position(|&b| b == 0)
+            .unwrap_or(self.name.len());
+        core::str::from_utf8(&self.name[..len]).unwrap_or_default()
+    }
+
+    pub(crate) fn name_bytes(&self) -> &[u8] {
+        self.name.as_slice()
     }
 
     pub(crate) fn inode(&self) -> INodeIndex {

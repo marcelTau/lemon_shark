@@ -1,7 +1,7 @@
 use crate::riscv::{self, Asid, Satp, SatpMode};
 use core::arch::asm;
 
-use virtual_memory::{pte_flags, PageTable, PhysAddr, PhysRange, VirtAddr, PAGE_SIZE};
+use virtual_memory::{PAGE_SIZE, PageTable, PhysAddr, PhysRange, VirtAddr, pte_flags};
 
 use crate::{device_tree, kernel_layout::KernelLayout, page_frame_allocator};
 
