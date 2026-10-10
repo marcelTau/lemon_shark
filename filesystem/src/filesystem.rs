@@ -527,9 +527,6 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
     ///
     /// TODO(mt): this assumes that `path` is absolute. How and where is this enforced? IIRC this
     /// is how the shell does it but it's not validated anywhere as far as I know.
-    ///
-    /// TODO(mt): also the `byte_compare` handling is quite awkward. Would be nice to get rid of
-    /// this.
     fn resolve_path<'a>(&mut self, path: &'a str) -> Result<ResolvedPath<'a>, Error> {
         let mut parent_dir = INodeIndex::new(0);
 
@@ -592,6 +589,8 @@ impl<Dev: BlockDevice> Filesystem<Dev> {
             return Err(Error::OperationNotSupported);
         }
 
+        // SAFETY: We guarantee that the `parent_inode` is a directory as the
+        // path lookup returned it as a parent.
         let num_parent_entries = unsafe { parent_inode.current_dir_entries() };
 
         let found = DirEntryReader::new(self.block_device_mut(), parent_inode)
